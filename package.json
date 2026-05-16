@@ -32,6 +32,7 @@
     "dev:link-openclaw": "node scripts/link-openclaw-dev.mjs",
     "test:hitl": "pnpm build && node scripts/hitl-proof.mjs",
     "test:openclaw-hitl": "pnpm build && node scripts/openclaw-hitl-e2e.mjs",
+    "test:local-full-e2e": "node scripts/local-full-e2e.mjs",
     "pack:check": "npm pack --dry-run",
     "clawhub:dry-run": "node scripts/clawhub-publish.mjs --dry-run",
     "clawhub:publish": "node scripts/clawhub-publish.mjs"

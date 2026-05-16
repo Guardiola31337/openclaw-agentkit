@@ -37,4 +37,12 @@ pnpm test:openclaw-hitl
 
 `test:hitl` covers the plugin's local HITL logic with mocked host dependencies. `test:openclaw-hitl` starts a real OpenClaw gateway, installs this checkout as an external plugin under a temporary OpenClaw state directory, runs the `before_tool_call` hook for protected tool `exec`, verifies the pending approval actions, denies the approval through `plugin.approval.resolve`, and asserts the hook blocks with `deniedReason: "plugin-approval"`.
 
+From this source checkout, run the full local flow in one command:
+
+```sh
+pnpm test:local-full-e2e -- --openclaw ../openclaw-agentkit-host-apis
+```
+
+Use `--skip-host-build` when the linked OpenClaw checkout is already built.
+
 Once OpenClaw publishes a compatible beta or stable release, replace the local link with the released `openclaw` package and update `package.json` compatibility metadata.

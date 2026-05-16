@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.5.16-beta.2
+
+- Published the standalone ClawHub package against the narrow OpenClaw HITL host helpers.
+
 ## 2026.5.16-beta.1
 
 - Tagged the standalone ClawHub package as the default install target while keeping it marked as a community beta.

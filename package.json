@@ -1,6 +1,6 @@
 {
   "name": "@guardiola31337/agentkit",
-  "version": "2026.5.16-beta.1",
+  "version": "2026.5.16-beta.2",
   "description": "World AgentKit-backed HITL approvals for OpenClaw protected tools",
   "license": "MIT",
   "type": "module",

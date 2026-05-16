@@ -7,8 +7,8 @@ Upstream tracker: https://github.com/openclaw/openclaw/issues/82336
 Current upstream split:
 
 - https://github.com/openclaw/openclaw/pull/82431 exposes plugin approval actions and no-route pending approvals.
-- https://github.com/openclaw/openclaw/pull/82434 exposes verified plugin approval resolution and operator-admin gateway helpers.
-- https://github.com/openclaw/openclaw/pull/82471 exposes durable `chat.inject` metadata for approval-card retry prompts.
+- https://github.com/openclaw/openclaw/pull/82434 exposes narrow verified plugin approval resolution.
+- https://github.com/openclaw/openclaw/pull/82471 exposes durable `chat.inject` metadata and a narrow chat injection helper for approval-card retry prompts.
 
 Until those PRs land, CI links against `Guardiola31337/openclaw@agentkit/external-plugin-host-apis`, a temporary branch that combines those host API changes for this external plugin.
 
@@ -17,7 +17,7 @@ Until those PRs land, CI links against `Guardiola31337/openclaw@agentkit/externa
 - `before_tool_call` result support for plugin-provided approval action descriptors, such as `Verify with World`.
 - Pending plugin approvals that can stay pending without an active approval route.
 - Verified approval resolution scoped to the originating plugin id.
-- Operator-admin gateway helpers for trusted plugin flows.
+- A narrow chat injection helper for trusted plugin approval/status prompts.
 - Transcript injection metadata for approval-card retry prompts.
 - Turn-source metadata propagation through the approval path so channel-originated approvals can return to the correct target.
 

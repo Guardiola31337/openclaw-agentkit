@@ -3,7 +3,7 @@ import {
   type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { withOperatorAdminGatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { injectChatMessageOverGateway } from "openclaw/plugin-sdk/gateway-runtime";
 import type { AgentkitPluginConfig } from "./config.js";
 import type { AgentkitPendingApproval } from "./hitl-approvals.js";
 import {
@@ -48,11 +48,11 @@ const activeHumanApprovalSessions = new Map<string, ActiveHumanApprovalSession>(
 
 type HumanApprovalChatInjectionParams = {
   appConfig: OpenClawConfig;
-  channelData?: unknown;
+  channelData?: Record<string, unknown>;
   command: boolean;
   gatewayUrl?: string;
   idempotencyKey: string;
-  interactive?: unknown;
+  interactive?: Record<string, unknown>;
   message: string;
   sessionKey: string;
 };
@@ -66,23 +66,17 @@ type HumanApprovalRuntimeDeps = {
 };
 
 async function injectChatMessage(params: HumanApprovalChatInjectionParams): Promise<void> {
-  await withOperatorAdminGatewayClient(
-    {
-      config: params.appConfig,
-      gatewayUrl: params.gatewayUrl,
-      clientDisplayName: "AgentKit approval update",
-    },
-    async (client) => {
-      await client.request("chat.inject", {
-        sessionKey: params.sessionKey,
-        message: params.message,
-        command: params.command,
-        interactive: params.interactive,
-        channelData: params.channelData,
-        idempotencyKey: params.idempotencyKey,
-      });
-    },
-  );
+  await injectChatMessageOverGateway({
+    config: params.appConfig,
+    gatewayUrl: params.gatewayUrl,
+    clientDisplayName: "AgentKit approval update",
+    sessionKey: params.sessionKey,
+    message: params.message,
+    command: params.command,
+    interactive: params.interactive,
+    channelData: params.channelData,
+    idempotencyKey: params.idempotencyKey,
+  });
 }
 
 const defaultHumanApprovalRuntimeDeps: HumanApprovalRuntimeDeps = {

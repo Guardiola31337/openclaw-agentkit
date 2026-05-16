@@ -1,7 +1,7 @@
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import {
-  withOperatorAdminGatewayClient,
+  resolveVerifiedPluginApprovalOverGateway,
   withOperatorApprovalsGatewayClient,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import type { AgentkitPluginConfig } from "./config.js";
@@ -157,20 +157,14 @@ export async function resolvePendingAgentkitApproval(params: {
   decision: ExecApprovalDecision;
   gatewayUrl?: string;
 }): Promise<void> {
-  await withOperatorAdminGatewayClient(
-    {
-      config: params.appConfig,
-      gatewayUrl: params.gatewayUrl,
-      clientDisplayName: "AgentKit proof-backed approval",
-    },
-    async (client) => {
-      await client.request("plugin.approval.resolveVerified", {
-        id: params.approvalId,
-        decision: params.decision,
-        pluginId: "agentkit",
-      });
-    },
-  );
+  await resolveVerifiedPluginApprovalOverGateway({
+    config: params.appConfig,
+    gatewayUrl: params.gatewayUrl,
+    clientDisplayName: "AgentKit proof-backed approval",
+    approvalId: params.approvalId,
+    decision: params.decision,
+    pluginId: "agentkit",
+  });
 }
 
 export function formatPendingAgentkitApprovalsText(

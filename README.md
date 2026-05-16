@@ -10,10 +10,10 @@ This is a community ClawHub package published as `@guardiola31337/agentkit`. It 
 - Current version: `2026.5.15-beta.3`
 - Channel: community beta
 - Upstream API tracker: `openclaw/openclaw#82336`
-- Required OpenClaw API PRs: `openclaw/openclaw#82431` and `openclaw/openclaw#82434`
+- Required OpenClaw API PRs: `openclaw/openclaw#82431`, `openclaw/openclaw#82434`, and `openclaw/openclaw#82471`
 - Temporary CI host API branch: `Guardiola31337/openclaw@agentkit/external-plugin-host-apis`
 
-The package depends on generic OpenClaw host APIs for external approval plugins. Until those APIs are available in an OpenClaw release, test this plugin against an OpenClaw checkout or beta build that includes the approval APIs listed in `docs/host-api.md`.
+The package depends on generic OpenClaw host APIs for external approval plugins. Until those APIs are available in an OpenClaw release, test this plugin against an OpenClaw checkout or beta build that includes the approval and chat injection APIs listed in `docs/host-api.md`.
 
 ## What It Does
 

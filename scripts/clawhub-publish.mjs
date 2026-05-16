@@ -49,7 +49,7 @@ const args = [
   "--clawscan-note",
   clawscanNote,
   "--tags",
-  "beta",
+  "beta,latest",
 ];
 
 if (dryRun) args.push("--dry-run");

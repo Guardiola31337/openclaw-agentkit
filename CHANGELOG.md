@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.5.16-beta.1
+
+- Tagged the standalone ClawHub package as the default install target while keeping it marked as a community beta.
+
 ## 2026.5.16-beta.0
 
 - Added a deterministic ClawHub publish helper that pins source metadata to the standalone AgentKit repository.

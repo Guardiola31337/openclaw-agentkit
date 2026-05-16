@@ -6,8 +6,8 @@ This is a community ClawHub package published as `@guardiola31337/agentkit`. It 
 
 ## Status
 
-- ClawHub package: `clawhub:@guardiola31337/agentkit@beta`
-- Current version: `2026.5.16-beta.0`
+- ClawHub package: `clawhub:@guardiola31337/agentkit`
+- Current version: `2026.5.16-beta.1`
 - Channel: community beta
 - Upstream API tracker: `openclaw/openclaw#82336`
 - Required OpenClaw API PRs: `openclaw/openclaw#82431`, `openclaw/openclaw#82434`, and `openclaw/openclaw#82471`
@@ -28,7 +28,7 @@ The package depends on generic OpenClaw host APIs for external approval plugins.
 Install from ClawHub once your OpenClaw build includes the required host APIs:
 
 ```sh
-openclaw plugins install clawhub:@guardiola31337/agentkit@beta
+openclaw plugins install clawhub:@guardiola31337/agentkit
 ```
 
 For local development against a sibling OpenClaw checkout:
@@ -127,7 +127,10 @@ for example:
 CLAWHUB_CLI=../clawhub/packages/clawhub/bin/clawdhub.js pnpm clawhub:dry-run
 ```
 
-Publish with `--tags latest` only after the compatible OpenClaw host APIs are available in a released OpenClaw build and this plugin has been tested against that release.
+The publish helper tags the current beta as both `beta` and `latest` so the
+default ClawHub install spec resolves. Keep the README status warning above in
+place until the compatible OpenClaw host APIs are available in a released
+OpenClaw build and this plugin has been tested against that release.
 
 ## Development
 

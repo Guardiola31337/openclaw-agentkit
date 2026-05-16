@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.5.15-beta.3
+
+- Documented the required ClawHub `--version` argument for local-folder publishes.
+
 ## 2026.5.15-beta.2
 
 - Renamed internal signer-key fields to avoid ClawHub static-scan false positives.

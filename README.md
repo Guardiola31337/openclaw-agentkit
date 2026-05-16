@@ -7,7 +7,7 @@ This is a community ClawHub package published as `@guardiola31337/agentkit`. It 
 ## Status
 
 - ClawHub package: `clawhub:@guardiola31337/agentkit@beta`
-- Current version: `2026.5.15-beta.2`
+- Current version: `2026.5.15-beta.3`
 - Channel: community beta
 - Upstream API tracker: `openclaw/openclaw#82336`
 
@@ -111,6 +111,7 @@ Dry-run a ClawHub publish:
 clawhub package publish . \
   --family code-plugin \
   --owner Guardiola31337 \
+  --version "$(node -p 'require(\"./package.json\").version')" \
   --source-repo Guardiola31337/openclaw-agentkit \
   --source-commit "$(git rev-parse HEAD)" \
   --source-ref main \
@@ -125,6 +126,7 @@ Publish the beta package:
 clawhub package publish . \
   --family code-plugin \
   --owner Guardiola31337 \
+  --version "$(node -p 'require(\"./package.json\").version')" \
   --source-repo Guardiola31337/openclaw-agentkit \
   --source-commit "$(git rev-parse HEAD)" \
   --source-ref main \

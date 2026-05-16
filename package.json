@@ -1,6 +1,6 @@
 {
   "name": "@guardiola31337/agentkit",
-  "version": "2026.5.15-beta.2",
+  "version": "2026.5.15-beta.3",
   "description": "World AgentKit-backed HITL approvals for OpenClaw protected tools",
   "license": "MIT",
   "type": "module",
@@ -31,7 +31,7 @@
     "clean": "rm -rf dist",
     "dev:link-openclaw": "node scripts/link-openclaw-dev.mjs",
     "pack:check": "npm pack --dry-run",
-    "clawhub:dry-run": "clawhub package publish . --family code-plugin --owner Guardiola31337 --tags beta --dry-run"
+    "clawhub:dry-run": "clawhub package publish . --family code-plugin --owner Guardiola31337 --version \"$npm_package_version\" --tags beta --dry-run"
   },
   "keywords": [
     "openclaw",

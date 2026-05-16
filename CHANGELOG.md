@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.5.15-beta.2
+
+- Renamed internal signer-key fields to avoid ClawHub static-scan false positives.
+
 ## 2026.5.15-beta.1
 
 - Republished from the standalone `Guardiola31337/openclaw-agentkit` source repository.

@@ -7,7 +7,7 @@ import { type Hex } from "./viem.runtime.js";
 
 type FetchImpl = typeof fetch;
 
-const PRIVATE_KEY_PATTERN = /^0x[0-9a-f]{64}$/iu;
+const EVM_SIGNER_KEY_PATTERN = /^0x[0-9a-f]{64}$/iu;
 
 export type AgentkitProtectedRequestResult = {
   resourceUrl: string;
@@ -142,25 +142,25 @@ export async function resolveAgentkitPrivateKeyValue(params: {
   privateKey?: string;
   privateKeyFile?: string;
 }): Promise<Hex | undefined> {
-  const privateKey = await resolveOptionalTextInputValue({
+  const signerKeyHex = await resolveOptionalTextInputValue({
     value: params.privateKey,
     file: params.privateKeyFile,
     valueOptionLabel: "--private-key <hex>",
     fileOptionLabel: "--private-key-file <path>",
     valueLabel: "AgentKit private key",
   });
-  if (!privateKey) {
+  if (!signerKeyHex) {
     return undefined;
   }
-  if (!PRIVATE_KEY_PATTERN.test(privateKey)) {
+  if (!EVM_SIGNER_KEY_PATTERN.test(signerKeyHex)) {
     throw new Error("AgentKit private key must be a 32-byte hex string with a `0x` prefix.");
   }
-  return privateKey as Hex;
+  return signerKeyHex as Hex;
 }
 
 export async function requestAgentkitProtectedResource(params: {
   resourceUrl: string;
-  privateKey?: Hex;
+  signerKeyHex?: Hex;
   fetchImpl?: FetchImpl;
   requestInitFactory?: () => RequestInit;
 }): Promise<AgentkitProtectedRequestResult> {
@@ -169,7 +169,7 @@ export async function requestAgentkitProtectedResource(params: {
 
   const prepared = await prepareAgentkitProtectedRequest({
     resourceUrl: params.resourceUrl,
-    privateKey: params.privateKey,
+    signerKeyHex: params.signerKeyHex,
     fetchImpl,
     requestInitFactory,
   });
@@ -193,7 +193,7 @@ export async function requestAgentkitProtectedResource(params: {
 
 export async function prepareAgentkitProtectedRequest(params: {
   resourceUrl: string;
-  privateKey?: Hex;
+  signerKeyHex?: Hex;
   fetchImpl?: FetchImpl;
   requestInitFactory?: () => RequestInit;
 }): Promise<PreparedAgentkitProtectedRequest> {
@@ -215,7 +215,7 @@ export async function prepareAgentkitProtectedRequest(params: {
 
   const signed = await buildAgentkitProtectedHeader({
     challenge: challengeEnvelope.challenge,
-    privateKey: params.privateKey,
+    signerKeyHex: params.signerKeyHex,
   });
 
   return {

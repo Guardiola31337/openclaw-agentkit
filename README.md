@@ -7,7 +7,7 @@ This is a community ClawHub package published as `@guardiola31337/agentkit`. It 
 ## Status
 
 - ClawHub package: `clawhub:@guardiola31337/agentkit@beta`
-- Current version: `2026.5.15-beta.1`
+- Current version: `2026.5.15-beta.2`
 - Channel: community beta
 - Upstream API tracker: `openclaw/openclaw#82336`
 

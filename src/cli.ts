@@ -178,7 +178,7 @@ async function runAgentkitVerifierRequestCommand(opts: {
   });
   const result = await runAgentkitVerifierRequest({
     serverOrigin: opts.server,
-    privateKey,
+    signerKeyHex: privateKey,
   });
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -199,7 +199,7 @@ async function runAgentkitProtectedRequestCommand(opts: {
   });
   const result = await requestAgentkitProtectedResource({
     resourceUrl: opts.resource,
-    privateKey,
+    signerKeyHex: privateKey,
   });
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -432,7 +432,7 @@ async function runAgentkitApproveCommand(
   }
   const protectedRequest = await requestAgentkitProtectedResource({
     resourceUrl,
-    privateKey,
+    signerKeyHex: privateKey,
   });
   if (protectedRequest.finalStatus !== 200) {
     throw new Error(

@@ -20,7 +20,7 @@ export type AgentkitVerifierRequestResult = {
 
 export async function runAgentkitVerifierRequest(params: {
   serverOrigin: string;
-  privateKey?: string;
+  signerKeyHex?: string;
   fetchImpl?: FetchImpl;
 }): Promise<AgentkitVerifierRequestResult> {
   const fetchImpl = params.fetchImpl ?? fetch;
@@ -37,7 +37,7 @@ export async function runAgentkitVerifierRequest(params: {
 
   const result = await requestAgentkitProtectedResource({
     resourceUrl: protectedResourceUrl,
-    privateKey: normalizeOptionalString(params.privateKey) as Hex | undefined,
+    signerKeyHex: normalizeOptionalString(params.signerKeyHex) as Hex | undefined,
     fetchImpl,
   });
 

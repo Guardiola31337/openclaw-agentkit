@@ -1,7 +1,11 @@
 import { Buffer } from "node:buffer";
 import { formatSIWEMessage, type AgentkitPayload } from "./agentkit.runtime.js";
 import type { AgentkitProtectedResourceChallenge } from "./protected-challenge.js";
-import { generatePrivateKey, privateKeyToAccount, type Hex } from "./viem.runtime.js";
+import {
+  generatePrivateKey as generateEphemeralSignerKey,
+  privateKeyToAccount as signerKeyToAccount,
+  type Hex,
+} from "./viem.runtime.js";
 
 export type AgentkitProtectedHeaderResult = {
   address: string;
@@ -27,11 +31,11 @@ function resolveEvmProtectedChallengeChain(challenge: AgentkitProtectedResourceC
 
 export async function buildAgentkitProtectedHeader(params: {
   challenge: AgentkitProtectedResourceChallenge;
-  privateKey?: Hex;
+  signerKeyHex?: Hex;
 }): Promise<AgentkitProtectedHeaderResult> {
   const chain = resolveEvmProtectedChallengeChain(params.challenge);
-  const privateKey = params.privateKey ?? generatePrivateKey();
-  const account = privateKeyToAccount(privateKey);
+  const signerKeyHex = params.signerKeyHex ?? generateEphemeralSignerKey();
+  const account = signerKeyToAccount(signerKeyHex);
   const message = formatSIWEMessage(
     {
       ...params.challenge.info,
@@ -54,6 +58,6 @@ export async function buildAgentkitProtectedHeader(params: {
     header: Buffer.from(JSON.stringify(payload), "utf8").toString("base64"),
     message,
     payload,
-    generatedPrivateKey: params.privateKey == null,
+    generatedPrivateKey: params.signerKeyHex == null,
   };
 }

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - uses: actions/checkout@v5
+        with:
+          repository: openclaw/openclaw
+          ref: refs/pull/78583/head
+          path: .openclaw-source
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+        working-directory: .openclaw-source
+      - run: pnpm dev:link-openclaw .openclaw-source
+      - run: pnpm build
+      - run: pnpm pack:check

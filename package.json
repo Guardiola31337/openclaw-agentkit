@@ -1,0 +1,97 @@
+{
+  "name": "@guardiola31337/agentkit",
+  "version": "2026.5.15-beta.0",
+  "description": "World AgentKit-backed HITL approvals for OpenClaw protected tools",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.1.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "index.ts",
+    "src",
+    "docs",
+    "openclaw.plugin.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.publish.json",
+    "clean": "rm -rf dist",
+    "dev:link-openclaw": "node scripts/link-openclaw-dev.mjs",
+    "pack:check": "npm pack --dry-run",
+    "clawhub:dry-run": "clawhub package publish . --family code-plugin --owner Guardiola31337 --tags beta --dry-run"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "clawhub",
+    "agentkit",
+    "world-id",
+    "hitl",
+    "human-in-the-loop"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Guardiola31337/openclaw-agentkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Guardiola31337/openclaw-agentkit/issues"
+  },
+  "homepage": "https://clawhub.ai/guardiola31337/agentkit",
+  "dependencies": {
+    "@worldcoin/agentkit": "^0.2.0",
+    "@worldcoin/idkit-core": "^4.1.4",
+    "viem": "^2.48.8"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.15-beta.0"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "commander": "^14.0.3",
+    "openclaw": "2026.5.16-beta.1",
+    "typescript": "^5.9.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@guardiola31337/agentkit",
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.5.15-beta.0"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.15-beta.0"
+    },
+    "build": {
+      "openclawVersion": "2026.5.14",
+      "pluginSdkVersion": "2026.5.14",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": false
+    }
+  }
+}

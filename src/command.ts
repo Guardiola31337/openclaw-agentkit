@@ -14,6 +14,18 @@ import {
 import { startOrReuseAgentkitHumanApprovalSession } from "./human-approval-background.js";
 import { formatAgentkitStatusText, resolveAgentkitStatus } from "./status.js";
 
+type AgentkitCommandRuntimeDeps = {
+  listPendingApprovals: typeof listPendingAgentkitApprovals;
+  startHumanApprovalSession: typeof startOrReuseAgentkitHumanApprovalSession;
+};
+
+const defaultAgentkitCommandRuntimeDeps: AgentkitCommandRuntimeDeps = {
+  listPendingApprovals: listPendingAgentkitApprovals,
+  startHumanApprovalSession: startOrReuseAgentkitHumanApprovalSession,
+};
+
+let agentkitCommandRuntimeDeps: AgentkitCommandRuntimeDeps = defaultAgentkitCommandRuntimeDeps;
+
 function formatUsage(statusText: string): string {
   return [
     "Usage: /agentkit status",
@@ -139,7 +151,7 @@ export function createAgentkitCommand(api: OpenClawPluginApi): OpenClawPluginCom
       }
 
       if (action === "approvals") {
-        const approvals = await listPendingAgentkitApprovals({
+        const approvals = await agentkitCommandRuntimeDeps.listPendingApprovals({
           appConfig,
         });
         return {
@@ -160,7 +172,7 @@ export function createAgentkitCommand(api: OpenClawPluginApi): OpenClawPluginCom
           };
         }
 
-        const approvals = await listPendingAgentkitApprovals({
+        const approvals = await agentkitCommandRuntimeDeps.listPendingApprovals({
           appConfig,
         });
         const trailingTokens = rawTokens.slice(1);
@@ -172,7 +184,7 @@ export function createAgentkitCommand(api: OpenClawPluginApi): OpenClawPluginCom
             approvals,
             sessionKey: ctx.sessionKey,
           });
-          const session = await startOrReuseAgentkitHumanApprovalSession({
+          const session = await agentkitCommandRuntimeDeps.startHumanApprovalSession({
             appConfig,
             approval,
             decision,
@@ -242,3 +254,15 @@ export function createAgentkitCommand(api: OpenClawPluginApi): OpenClawPluginCom
     },
   };
 }
+
+export const __testing = {
+  resetAgentkitCommandRuntimeDeps: () => {
+    agentkitCommandRuntimeDeps = defaultAgentkitCommandRuntimeDeps;
+  },
+  setAgentkitCommandRuntimeDeps: (overrides: Partial<AgentkitCommandRuntimeDeps>) => {
+    agentkitCommandRuntimeDeps = {
+      ...defaultAgentkitCommandRuntimeDeps,
+      ...overrides,
+    };
+  },
+};

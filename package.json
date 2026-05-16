@@ -30,6 +30,7 @@
     "build": "tsc -p tsconfig.publish.json",
     "clean": "rm -rf dist",
     "dev:link-openclaw": "node scripts/link-openclaw-dev.mjs",
+    "test:hitl": "pnpm build && node scripts/hitl-proof.mjs",
     "pack:check": "npm pack --dry-run",
     "clawhub:dry-run": "clawhub package publish . --family code-plugin --owner Guardiola31337 --version \"$npm_package_version\" --tags beta --dry-run"
   },

@@ -46,6 +46,55 @@ type ActiveHumanApprovalSession = AgentkitHumanApprovalBackgroundSession & {
 
 const activeHumanApprovalSessions = new Map<string, ActiveHumanApprovalSession>();
 
+type HumanApprovalChatInjectionParams = {
+  appConfig: OpenClawConfig;
+  channelData?: unknown;
+  command: boolean;
+  gatewayUrl?: string;
+  idempotencyKey: string;
+  interactive?: unknown;
+  message: string;
+  sessionKey: string;
+};
+
+type HumanApprovalRuntimeDeps = {
+  injectChatMessage: (params: HumanApprovalChatInjectionParams) => Promise<void>;
+  listPendingApprovals: typeof listPendingAgentkitApprovals;
+  renderQrCodeToString: typeof renderQrCodeToString;
+  resolvePendingApproval: typeof resolvePendingAgentkitApproval;
+  startWorldHumanApprovalSession: typeof startAgentkitWorldHumanApprovalSession;
+};
+
+async function injectChatMessage(params: HumanApprovalChatInjectionParams): Promise<void> {
+  await withOperatorAdminGatewayClient(
+    {
+      config: params.appConfig,
+      gatewayUrl: params.gatewayUrl,
+      clientDisplayName: "AgentKit approval update",
+    },
+    async (client) => {
+      await client.request("chat.inject", {
+        sessionKey: params.sessionKey,
+        message: params.message,
+        command: params.command,
+        interactive: params.interactive,
+        channelData: params.channelData,
+        idempotencyKey: params.idempotencyKey,
+      });
+    },
+  );
+}
+
+const defaultHumanApprovalRuntimeDeps: HumanApprovalRuntimeDeps = {
+  injectChatMessage,
+  listPendingApprovals: listPendingAgentkitApprovals,
+  renderQrCodeToString,
+  resolvePendingApproval: resolvePendingAgentkitApproval,
+  startWorldHumanApprovalSession: startAgentkitWorldHumanApprovalSession,
+};
+
+let humanApprovalRuntimeDeps: HumanApprovalRuntimeDeps = defaultHumanApprovalRuntimeDeps;
+
 function extractVerificationDetail(verifyBody: unknown): string | null {
   if (typeof verifyBody === "string") {
     const trimmed = verifyBody.trim();
@@ -95,6 +144,7 @@ function formatWorldFailureMessage(params: {
 async function injectPendingRetryPrompt(params: {
   appConfig: OpenClawConfig;
   approval: AgentkitPendingApproval;
+  deps: HumanApprovalRuntimeDeps;
   gatewayUrl?: string;
   pluginConfig: AgentkitPluginConfig;
   result: AgentkitHumanApprovalSessionResult;
@@ -124,23 +174,16 @@ async function injectPendingRetryPrompt(params: {
     agentId: params.approval.request.agentId ?? undefined,
     sessionKey,
   });
-  await withOperatorAdminGatewayClient(
-    {
-      config: params.appConfig,
-      gatewayUrl: params.gatewayUrl,
-      clientDisplayName: "AgentKit approval retry",
-    },
-    async (client) => {
-      await client.request("chat.inject", {
-        sessionKey,
-        message: payload.text,
-        command: true,
-        interactive: payload.interactive,
-        channelData: payload.channelData,
-        idempotencyKey: `plugin-approval:${params.approval.id}:world-failure:${params.result.requestId}`,
-      });
-    },
-  );
+  await params.deps.injectChatMessage({
+    appConfig: params.appConfig,
+    gatewayUrl: params.gatewayUrl,
+    sessionKey,
+    message: payload.text ?? "",
+    command: true,
+    interactive: payload.interactive,
+    channelData: payload.channelData,
+    idempotencyKey: `plugin-approval:${params.approval.id}:world-failure:${params.result.requestId}`,
+  });
 }
 
 function canPersistGrant(params: {
@@ -173,10 +216,11 @@ function approvalMatchesSessionScope(params: {
 async function listMatchingPendingApprovals(params: {
   appConfig: OpenClawConfig;
   approval: AgentkitPendingApproval;
+  deps: HumanApprovalRuntimeDeps;
   gatewayUrl?: string;
   pluginConfig: AgentkitPluginConfig;
 }): Promise<AgentkitPendingApproval[]> {
-  const approvals = await listPendingAgentkitApprovals({
+  const approvals = await params.deps.listPendingApprovals({
     appConfig: params.appConfig,
     gatewayUrl: params.gatewayUrl,
   });
@@ -190,9 +234,10 @@ async function listMatchingPendingApprovals(params: {
 async function listRemainingPendingApprovalsForSession(params: {
   appConfig: OpenClawConfig;
   approval: AgentkitPendingApproval;
+  deps: HumanApprovalRuntimeDeps;
   gatewayUrl?: string;
 }): Promise<AgentkitPendingApproval[]> {
-  const approvals = await listPendingAgentkitApprovals({
+  const approvals = await params.deps.listPendingApprovals({
     appConfig: params.appConfig,
     gatewayUrl: params.gatewayUrl,
   });
@@ -210,6 +255,7 @@ async function resolveMatchingPendingApprovals(params: {
   appConfig: OpenClawConfig;
   approval: AgentkitPendingApproval;
   decision: Extract<ExecApprovalDecision, "allow-always">;
+  deps: HumanApprovalRuntimeDeps;
   gatewayUrl?: string;
   logger?: LoggerLike;
   pluginConfig: AgentkitPluginConfig;
@@ -217,13 +263,14 @@ async function resolveMatchingPendingApprovals(params: {
   const matching = await listMatchingPendingApprovals({
     appConfig: params.appConfig,
     approval: params.approval,
+    deps: params.deps,
     gatewayUrl: params.gatewayUrl,
     pluginConfig: params.pluginConfig,
   });
   await Promise.all(
     matching.map(async (approval) => {
       try {
-        await resolvePendingAgentkitApproval({
+        await params.deps.resolvePendingApproval({
           appConfig: params.appConfig,
           approvalId: approval.id,
           decision: params.decision,
@@ -258,6 +305,7 @@ function formatRemainingPendingApprovalsMessage(params: {
 async function injectRemainingPendingApprovalsPrompt(params: {
   appConfig: OpenClawConfig;
   approval: AgentkitPendingApproval;
+  deps: HumanApprovalRuntimeDeps;
   gatewayUrl?: string;
   logger?: LoggerLike;
   pluginConfig: AgentkitPluginConfig;
@@ -269,6 +317,7 @@ async function injectRemainingPendingApprovalsPrompt(params: {
   const remaining = await listRemainingPendingApprovalsForSession({
     appConfig: params.appConfig,
     approval: params.approval,
+    deps: params.deps,
     gatewayUrl: params.gatewayUrl,
   });
   if (remaining.length === 0) {
@@ -279,45 +328,38 @@ async function injectRemainingPendingApprovalsPrompt(params: {
     return;
   }
   try {
-    await withOperatorAdminGatewayClient(
-      {
-        config: params.appConfig,
-        gatewayUrl: params.gatewayUrl,
-        clientDisplayName: "AgentKit pending approval reminder",
-      },
-      async (client) => {
-        const payload = buildApprovalPendingReplyPayload({
-          approvalKind: "plugin",
-          approvalId: nextApproval.id,
-          approvalSlug: nextApproval.id.slice(0, 8),
-          text: formatRemainingPendingApprovalsMessage({
-            approval: params.approval,
-            remaining,
-          }),
-          actions: buildHumanApprovalPendingActions({
-            approvalId: nextApproval.id,
-            pluginConfig: params.pluginConfig,
-          }),
-          title: nextApproval.request.title,
-          description:
-            nextApproval.request.description ||
-            "The agent turn is still blocked. Verify with World or deny the request.",
-          severity: nextApproval.request.severity ?? "warning",
-          toolName: nextApproval.request.toolName ?? undefined,
-          pluginId: nextApproval.request.pluginId ?? "agentkit",
-          agentId: nextApproval.request.agentId ?? undefined,
-          sessionKey,
-        });
-        await client.request("chat.inject", {
-          sessionKey,
-          message: payload.text,
-          command: true,
-          interactive: payload.interactive,
-          channelData: payload.channelData,
-          idempotencyKey: `plugin-approval:${params.approval.id}:remaining-pending`,
-        });
-      },
-    );
+    const payload = buildApprovalPendingReplyPayload({
+      approvalKind: "plugin",
+      approvalId: nextApproval.id,
+      approvalSlug: nextApproval.id.slice(0, 8),
+      text: formatRemainingPendingApprovalsMessage({
+        approval: params.approval,
+        remaining,
+      }),
+      actions: buildHumanApprovalPendingActions({
+        approvalId: nextApproval.id,
+        pluginConfig: params.pluginConfig,
+      }),
+      title: nextApproval.request.title,
+      description:
+        nextApproval.request.description ||
+        "The agent turn is still blocked. Verify with World or deny the request.",
+      severity: nextApproval.request.severity ?? "warning",
+      toolName: nextApproval.request.toolName ?? undefined,
+      pluginId: nextApproval.request.pluginId ?? "agentkit",
+      agentId: nextApproval.request.agentId ?? undefined,
+      sessionKey,
+    });
+    await params.deps.injectChatMessage({
+      appConfig: params.appConfig,
+      gatewayUrl: params.gatewayUrl,
+      sessionKey,
+      message: payload.text ?? "",
+      command: true,
+      interactive: payload.interactive,
+      channelData: payload.channelData,
+      idempotencyKey: `plugin-approval:${params.approval.id}:remaining-pending`,
+    });
   } catch (error) {
     params.logger?.warn?.(
       `agentkit: failed to inject remaining pending approvals prompt for ${params.approval.id}: ${String(
@@ -331,18 +373,19 @@ async function completeHumanApprovalSession(params: {
   appConfig: OpenClawConfig;
   approval: AgentkitPendingApproval;
   decision: ExecApprovalDecision;
+  deps: HumanApprovalRuntimeDeps;
   env?: NodeJS.ProcessEnv;
   gatewayUrl?: string;
   logger?: LoggerLike;
   pluginConfig: AgentkitPluginConfig;
 }): Promise<ActiveHumanApprovalSession> {
-  const pending = await startAgentkitWorldHumanApprovalSession({
+  const pending = await params.deps.startWorldHumanApprovalSession({
     approval: params.approval,
     pluginConfig: params.pluginConfig,
     env: params.env,
     timeoutMs: params.pluginConfig.hitl.timeoutMs,
   });
-  const qrText = await renderQrCodeToString(pending.connectorURI);
+  const qrText = await params.deps.renderQrCodeToString(pending.connectorURI);
   const session: ActiveHumanApprovalSession = {
     action: pending.action,
     approvalId: params.approval.id,
@@ -365,6 +408,7 @@ async function completeHumanApprovalSession(params: {
         await injectPendingRetryPrompt({
           appConfig: params.appConfig,
           approval: params.approval,
+          deps: params.deps,
           gatewayUrl: params.gatewayUrl,
           pluginConfig: params.pluginConfig,
           result,
@@ -372,7 +416,7 @@ async function completeHumanApprovalSession(params: {
         return;
       }
 
-      await resolvePendingAgentkitApproval({
+      await params.deps.resolvePendingApproval({
         appConfig: params.appConfig,
         approvalId: params.approval.id,
         decision: params.decision,
@@ -419,6 +463,7 @@ async function completeHumanApprovalSession(params: {
           appConfig: params.appConfig,
           approval: params.approval,
           decision: params.decision,
+          deps: params.deps,
           gatewayUrl: params.gatewayUrl,
           logger: params.logger,
           pluginConfig: params.pluginConfig,
@@ -427,6 +472,7 @@ async function completeHumanApprovalSession(params: {
         await injectRemainingPendingApprovalsPrompt({
           appConfig: params.appConfig,
           approval: params.approval,
+          deps: params.deps,
           gatewayUrl: params.gatewayUrl,
           logger: params.logger,
           pluginConfig: params.pluginConfig,
@@ -440,6 +486,7 @@ async function completeHumanApprovalSession(params: {
       await injectPendingRetryPrompt({
         appConfig: params.appConfig,
         approval: params.approval,
+        deps: params.deps,
         gatewayUrl: params.gatewayUrl,
         pluginConfig: params.pluginConfig,
         result: {
@@ -484,10 +531,12 @@ export async function startOrReuseAgentkitHumanApprovalSession(params: {
     };
   }
 
+  const deps = humanApprovalRuntimeDeps;
   const session = await completeHumanApprovalSession({
     appConfig: params.appConfig,
     approval: params.approval,
     decision: params.decision ?? "allow-once",
+    deps,
     env: params.env,
     gatewayUrl: params.gatewayUrl,
     logger: params.logger,
@@ -506,4 +555,15 @@ export async function startOrReuseAgentkitHumanApprovalSession(params: {
 
 export const __testing = {
   activeHumanApprovalSessions,
+  resetHumanApprovalRuntimeDeps: () => {
+    humanApprovalRuntimeDeps = defaultHumanApprovalRuntimeDeps;
+    activeHumanApprovalSessions.clear();
+  },
+  setHumanApprovalRuntimeDeps: (overrides: Partial<HumanApprovalRuntimeDeps>) => {
+    humanApprovalRuntimeDeps = {
+      ...defaultHumanApprovalRuntimeDeps,
+      ...overrides,
+    };
+    activeHumanApprovalSessions.clear();
+  },
 };

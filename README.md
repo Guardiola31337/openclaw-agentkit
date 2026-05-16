@@ -7,7 +7,7 @@ This is a community ClawHub package published as `@guardiola31337/agentkit`. It 
 ## Status
 
 - ClawHub package: `clawhub:@guardiola31337/agentkit@beta`
-- Current version: `2026.5.15-beta.3`
+- Current version: `2026.5.16-beta.0`
 - Channel: community beta
 - Upstream API tracker: `openclaw/openclaw#82336`
 - Required OpenClaw API PRs: `openclaw/openclaw#82431`, `openclaw/openclaw#82434`, and `openclaw/openclaw#82471`
@@ -110,30 +110,21 @@ openclaw agentkit status
 Dry-run a ClawHub publish:
 
 ```sh
-clawhub package publish . \
-  --family code-plugin \
-  --owner Guardiola31337 \
-  --version "$(node -p 'require(\"./package.json\").version')" \
-  --source-repo Guardiola31337/openclaw-agentkit \
-  --source-commit "$(git rev-parse HEAD)" \
-  --source-ref main \
-  --clawscan-note "World AgentKit integration: contacts World/AgentKit APIs, can open a local verifier callback, and uses OpenClaw operator approval APIs to resolve protected-tool HITL approvals after proof verification." \
-  --tags beta \
-  --dry-run
+pnpm clawhub:dry-run
 ```
 
 Publish the beta package:
 
 ```sh
-clawhub package publish . \
-  --family code-plugin \
-  --owner Guardiola31337 \
-  --version "$(node -p 'require(\"./package.json\").version')" \
-  --source-repo Guardiola31337/openclaw-agentkit \
-  --source-commit "$(git rev-parse HEAD)" \
-  --source-ref main \
-  --clawscan-note "World AgentKit integration: contacts World/AgentKit APIs, can open a local verifier callback, and uses OpenClaw operator approval APIs to resolve protected-tool HITL approvals after proof verification." \
-  --tags beta
+pnpm clawhub:publish
+```
+
+The publish helper expects `clawhub` on `PATH`. When using a sibling ClawHub
+checkout instead of a global install, point `CLAWHUB_CLI` at its CLI entrypoint,
+for example:
+
+```sh
+CLAWHUB_CLI=../clawhub/packages/clawhub/bin/clawdhub.js pnpm clawhub:dry-run
 ```
 
 Publish with `--tags latest` only after the compatible OpenClaw host APIs are available in a released OpenClaw build and this plugin has been tested against that release.

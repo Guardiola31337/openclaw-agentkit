@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.5.16-beta.0
+
+- Added a deterministic ClawHub publish helper that pins source metadata to the standalone AgentKit repository.
+
 ## 2026.5.15-beta.3
 
 - Documented the required ClawHub `--version` argument for local-folder publishes.

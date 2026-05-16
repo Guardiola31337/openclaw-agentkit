@@ -2,7 +2,7 @@
 
 World AgentKit-backed human-in-the-loop approvals for OpenClaw protected tools.
 
-This is a community ClawHub package published as `@guardiola31337/agentkit`. It was extracted from the OpenClaw AgentKit prototype in `openclaw/openclaw#78583` so the integration can live outside OpenClaw core.
+This is a community ClawHub package published as `@guardiola31337/agentkit`. It was extracted from the OpenClaw AgentKit prototype in `openclaw/openclaw#78583` so the integration can live outside OpenClaw core. The required OpenClaw host APIs are now split across smaller upstream PRs.
 
 ## Status
 
@@ -10,6 +10,8 @@ This is a community ClawHub package published as `@guardiola31337/agentkit`. It 
 - Current version: `2026.5.15-beta.3`
 - Channel: community beta
 - Upstream API tracker: `openclaw/openclaw#82336`
+- Required OpenClaw API PRs: `openclaw/openclaw#82431` and `openclaw/openclaw#82434`
+- Temporary CI host API branch: `Guardiola31337/openclaw@agentkit/external-plugin-host-apis`
 
 The package depends on generic OpenClaw host APIs for external approval plugins. Until those APIs are available in an OpenClaw release, test this plugin against an OpenClaw checkout or beta build that includes the approval APIs listed in `docs/host-api.md`.
 

@@ -4,6 +4,13 @@ This package is intentionally outside OpenClaw core. It needs generic OpenClaw p
 
 Upstream tracker: https://github.com/openclaw/openclaw/issues/82336
 
+Current upstream split:
+
+- https://github.com/openclaw/openclaw/pull/82431 exposes plugin approval actions and no-route pending approvals.
+- https://github.com/openclaw/openclaw/pull/82434 exposes verified plugin approval resolution and operator-admin gateway helpers.
+
+Until both PRs land, CI links against `Guardiola31337/openclaw@agentkit/external-plugin-host-apis`, a temporary branch that combines those host API changes for this external plugin.
+
 ## Required Surface
 
 - `before_tool_call` result support for plugin-provided approval action descriptors, such as `Verify with World`.

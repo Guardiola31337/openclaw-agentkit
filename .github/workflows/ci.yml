@@ -25,6 +25,8 @@ jobs:
           path: .openclaw-source
       - run: pnpm install --frozen-lockfile --ignore-scripts
         working-directory: .openclaw-source
+      - run: pnpm build:plugin-sdk:strict-smoke
+        working-directory: .openclaw-source
       - run: pnpm dev:link-openclaw .openclaw-source
       - run: pnpm build
       - run: pnpm pack:check

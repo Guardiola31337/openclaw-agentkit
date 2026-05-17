@@ -71,6 +71,61 @@ Enable the plugin through OpenClaw plugin config. This example protects the `exe
 }
 ```
 
+### Example: Protect TweetClaw Actions
+
+AgentKit can gate high-impact OpenClaw plugin tools while leaving safe
+catalog tools available. For X/Twitter automation, install
+[TweetClaw](https://github.com/Xquik-dev/tweetclaw) and protect the
+live `tweetclaw` invoker. Keep the free `explore` catalog tool outside
+the protected list so the agent can discover endpoints before a human
+approves the live call.
+
+```sh
+openclaw plugins install @xquik/tweetclaw
+```
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentkit": {
+        "enabled": true,
+        "config": {
+          "walletAddress": "0x0000000000000000000000000000000000000000",
+          "hitl": {
+            "enabled": true,
+            "mode": "human-approval",
+            "protectedTools": ["tweetclaw"],
+            "grantScope": "session",
+            "grantTtlMs": 1800000,
+            "humanApproval": {
+              "provider": "hosted",
+              "brokerUrl": "https://example.com/world-approval"
+            }
+          }
+        }
+      },
+      "tweetclaw": {
+        "enabled": true,
+        "config": {
+          "apiKey": "${XQUIK_API_KEY}"
+        }
+      }
+    }
+  },
+  "tools": {
+    "alsoAllow": ["explore", "tweetclaw"]
+  }
+}
+```
+
+That setup lets the agent search the TweetClaw endpoint catalog, then
+pauses before any live Xquik-backed call such as search tweets, search
+tweet replies, follower export, user lookup, monitor tweets, webhooks,
+direct messages, post tweets, or post tweet replies. References:
+[npm package](https://www.npmjs.com/package/@xquik/tweetclaw) and
+[ClawHub listing](https://clawhub.ai/plugins/@xquik/tweetclaw).
+
 For custom verifier deployments, use environment indirection for the signing key:
 
 ```json

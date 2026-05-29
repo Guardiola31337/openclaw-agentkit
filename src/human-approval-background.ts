@@ -3,7 +3,6 @@ import {
   type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { injectChatMessageOverGateway } from "openclaw/plugin-sdk/gateway-runtime";
 import type { AgentkitPluginConfig } from "./config.js";
 import type { AgentkitPendingApproval } from "./hitl-approvals.js";
 import {
@@ -15,8 +14,8 @@ import {
 } from "./hitl-approvals.js";
 import { saveAgentkitHitlGrant } from "./hitl-grants.js";
 import {
-  buildHumanApprovalPendingActions,
-  buildHumanApprovalRetryActions,
+  buildHumanApprovalCommandLines,
+  type HumanApprovalCommandDecision,
 } from "./human-approval-actions.js";
 import {
   startAgentkitWorldHumanApprovalSession,
@@ -34,7 +33,7 @@ export type AgentkitHumanApprovalBackgroundSession = {
   action: string;
   approvalId: string;
   connectorURI: string;
-  decision: ExecApprovalDecision;
+  decision: HumanApprovalCommandDecision;
   qrText: string | null;
   requestId: string;
   reused: boolean;
@@ -54,6 +53,7 @@ type HumanApprovalChatInjectionParams = {
   idempotencyKey: string;
   interactive?: Record<string, unknown>;
   message: string;
+  presentation?: unknown;
   sessionKey: string;
 };
 
@@ -66,6 +66,14 @@ type HumanApprovalRuntimeDeps = {
 };
 
 async function injectChatMessage(params: HumanApprovalChatInjectionParams): Promise<void> {
+  const gatewayRuntime = (await import("openclaw/plugin-sdk/gateway-runtime")) as Record<
+    string,
+    unknown
+  >;
+  const injectChatMessageOverGateway = gatewayRuntime.injectChatMessageOverGateway;
+  if (typeof injectChatMessageOverGateway !== "function") {
+    return;
+  }
   await injectChatMessageOverGateway({
     config: params.appConfig,
     gatewayUrl: params.gatewayUrl,
@@ -74,6 +82,7 @@ async function injectChatMessage(params: HumanApprovalChatInjectionParams): Prom
     message: params.message,
     command: params.command,
     interactive: params.interactive,
+    presentation: params.presentation,
     channelData: params.channelData,
     idempotencyKey: params.idempotencyKey,
   });
@@ -107,10 +116,6 @@ function extractVerificationDetail(verifyBody: unknown): string | null {
   return null;
 }
 
-function buildWorldFailureTitle(approval: AgentkitPendingApproval): string {
-  return `World verification failed for ${approval.request.toolName ?? "this action"}`;
-}
-
 function formatWorldFailureMessage(params: {
   approval: AgentkitPendingApproval;
   result: AgentkitHumanApprovalSessionResult;
@@ -122,6 +127,9 @@ function formatWorldFailureMessage(params: {
   ];
   if (params.result.errorCode) {
     lines.push(`World error: ${params.result.errorCode}`);
+  }
+  if (params.result.pollStatus) {
+    lines.push(`World status: ${params.result.pollStatus}`);
   }
   if (params.result.verifyStatus != null) {
     lines.push(`Verification status: ${params.result.verifyStatus}`);
@@ -147,24 +155,23 @@ async function injectPendingRetryPrompt(params: {
   if (!sessionKey) {
     return;
   }
+  const text = [
+    formatWorldFailureMessage({
+      approval: params.approval,
+      result: params.result,
+    }),
+    "",
+    ...buildHumanApprovalCommandLines({
+      approvalId: params.approval.id,
+      pluginConfig: params.pluginConfig,
+    }),
+  ].join("\n");
   const payload = buildApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.approval.id,
     approvalSlug: params.approval.id.slice(0, 8),
-    text: formatWorldFailureMessage({
-      approval: params.approval,
-      result: params.result,
-    }),
-    actions: buildHumanApprovalRetryActions({
-      approvalId: params.approval.id,
-      pluginConfig: params.pluginConfig,
-    }),
-    title: buildWorldFailureTitle(params.approval),
-    description:
-      "The action is still blocked. Retry the World verification flow or deny the request.",
-    severity: params.approval.request.severity ?? "warning",
-    toolName: params.approval.request.toolName ?? undefined,
-    pluginId: params.approval.request.pluginId ?? "agentkit",
+    text,
+    allowedDecisions: ["deny"],
     agentId: params.approval.request.agentId ?? undefined,
     sessionKey,
   });
@@ -175,6 +182,7 @@ async function injectPendingRetryPrompt(params: {
     message: payload.text ?? "",
     command: true,
     interactive: payload.interactive,
+    presentation: payload.presentation,
     channelData: payload.channelData,
     idempotencyKey: `plugin-approval:${params.approval.id}:world-failure:${params.result.requestId}`,
   });
@@ -182,7 +190,7 @@ async function injectPendingRetryPrompt(params: {
 
 function canPersistGrant(params: {
   approval: AgentkitPendingApproval;
-  decision: ExecApprovalDecision;
+  decision: HumanApprovalCommandDecision;
   pluginConfig: AgentkitPluginConfig;
 }): boolean {
   if (params.decision !== "allow-always") {
@@ -322,25 +330,23 @@ async function injectRemainingPendingApprovalsPrompt(params: {
     return;
   }
   try {
+    const text = [
+      formatRemainingPendingApprovalsMessage({
+        approval: params.approval,
+        remaining,
+      }),
+      "",
+      ...buildHumanApprovalCommandLines({
+        approvalId: nextApproval.id,
+        pluginConfig: params.pluginConfig,
+      }),
+    ].join("\n");
     const payload = buildApprovalPendingReplyPayload({
       approvalKind: "plugin",
       approvalId: nextApproval.id,
       approvalSlug: nextApproval.id.slice(0, 8),
-      text: formatRemainingPendingApprovalsMessage({
-        approval: params.approval,
-        remaining,
-      }),
-      actions: buildHumanApprovalPendingActions({
-        approvalId: nextApproval.id,
-        pluginConfig: params.pluginConfig,
-      }),
-      title: nextApproval.request.title,
-      description:
-        nextApproval.request.description ||
-        "The agent turn is still blocked. Verify with World or deny the request.",
-      severity: nextApproval.request.severity ?? "warning",
-      toolName: nextApproval.request.toolName ?? undefined,
-      pluginId: nextApproval.request.pluginId ?? "agentkit",
+      text,
+      allowedDecisions: ["deny"],
       agentId: nextApproval.request.agentId ?? undefined,
       sessionKey,
     });
@@ -351,6 +357,7 @@ async function injectRemainingPendingApprovalsPrompt(params: {
       message: payload.text ?? "",
       command: true,
       interactive: payload.interactive,
+      presentation: payload.presentation,
       channelData: payload.channelData,
       idempotencyKey: `plugin-approval:${params.approval.id}:remaining-pending`,
     });
@@ -366,7 +373,7 @@ async function injectRemainingPendingApprovalsPrompt(params: {
 async function completeHumanApprovalSession(params: {
   appConfig: OpenClawConfig;
   approval: AgentkitPendingApproval;
-  decision: ExecApprovalDecision;
+  decision: HumanApprovalCommandDecision;
   deps: HumanApprovalRuntimeDeps;
   env?: NodeJS.ProcessEnv;
   gatewayUrl?: string;
@@ -492,6 +499,7 @@ async function completeHumanApprovalSession(params: {
           verifyStatus: null,
           verifyBody: null,
           errorCode: error instanceof Error ? error.message : "unexpected_failure",
+          pollStatus: null,
           nullifier: null,
         },
       });
@@ -506,7 +514,7 @@ async function completeHumanApprovalSession(params: {
 export async function startOrReuseAgentkitHumanApprovalSession(params: {
   appConfig: OpenClawConfig;
   approval: AgentkitPendingApproval;
-  decision?: ExecApprovalDecision;
+  decision?: HumanApprovalCommandDecision;
   env?: NodeJS.ProcessEnv;
   gatewayUrl?: string;
   logger?: LoggerLike;

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginCliCommandDescriptor } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredAgentkitPluginConfig } from "./config.js";
 import {
+  denyPendingAgentkitApproval,
   filterMatchingPendingAgentkitApprovals,
   formatPendingAgentkitApprovalsText,
   listPendingAgentkitApprovals,
@@ -288,10 +289,9 @@ async function runAgentkitApproveCommand(
   const shouldPersistGrant = decision === "allow-always" && canPersistGrant;
 
   if (decision === "deny") {
-    await resolvePendingAgentkitApproval({
+    await denyPendingAgentkitApproval({
       appConfig,
       approvalId: approval.id,
-      decision,
       gatewayUrl: opts.gatewayUrl,
     });
     const payload = {

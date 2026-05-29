@@ -45,6 +45,7 @@ export type AgentkitHumanApprovalSessionResult = {
   verifyStatus: number | null;
   verifyBody: unknown;
   errorCode: string | null;
+  pollStatus: string | null;
   nullifier: string | null;
 };
 
@@ -63,6 +64,11 @@ export type AgentkitHumanApprovalPendingSession = Omit<
 
 type FetchImpl = typeof fetch;
 type UnknownRecord = Record<string, unknown>;
+type WorldApprovalPollStatus = {
+  type?: string;
+  result?: unknown;
+  error?: string;
+};
 
 function asRecord(value: unknown): UnknownRecord | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -221,6 +227,60 @@ function verifyWorldCompletionResult(params: {
 function isSuccessfulVerifyBody(value: unknown): boolean {
   const record = asRecord(value);
   return record?.success === true;
+}
+
+function normalizePollStatusType(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizePollError(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function timeoutErrorForPollStatus(status: string | null): string {
+  return status ? `timeout_${status}` : "timeout";
+}
+
+async function pollWorldApprovalUntilCompletion(params: {
+  request: { pollOnce: () => Promise<WorldApprovalPollStatus> };
+  timeoutMs: number;
+  pollIntervalMs?: number;
+}): Promise<
+  | { success: true; result: unknown; lastStatus: string | null }
+  | { success: false; error: string; lastStatus: string | null }
+> {
+  const pollIntervalMs = Math.max(250, params.pollIntervalMs ?? 1_000);
+  const timeoutMs = Math.max(1_000, params.timeoutMs);
+  const startedAtMs = Date.now();
+  let lastStatus: string | null = null;
+
+  while (true) {
+    if (Date.now() - startedAtMs > timeoutMs) {
+      return {
+        success: false,
+        error: timeoutErrorForPollStatus(lastStatus),
+        lastStatus,
+      };
+    }
+
+    const status = await params.request.pollOnce();
+    lastStatus = normalizePollStatusType(status.type) ?? lastStatus;
+    if (status.type === "confirmed" && status.result) {
+      return {
+        success: true,
+        result: status.result,
+        lastStatus,
+      };
+    }
+    if (status.type === "failed") {
+      return {
+        success: false,
+        error: normalizePollError(status.error) ?? "generic_error",
+        lastStatus,
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
 }
 
 function buildWorldHumanApprovalAction(approvalId: string, actionPrefix: string): string {
@@ -443,8 +503,9 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
     connectorURI: request.connectorURI,
     requestId: request.requestId,
     waitForCompletion: async () => {
-      const completion = await request.pollUntilCompletion({
-        timeout: Math.max(1_000, (params.timeoutMs ?? params.pluginConfig.hitl.timeoutMs) - 1_000),
+      const completion = await pollWorldApprovalUntilCompletion({
+        request,
+        timeoutMs: Math.max(1_000, (params.timeoutMs ?? params.pluginConfig.hitl.timeoutMs) - 1_000),
       });
       if (!completion.success) {
         return {
@@ -456,6 +517,7 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
           verifyStatus: null,
           verifyBody: null,
           errorCode: completion.error,
+          pollStatus: completion.lastStatus,
           nullifier: null,
         };
       }
@@ -475,6 +537,7 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
           verifyStatus: null,
           verifyBody: null,
           errorCode: proofError,
+          pollStatus: completion.lastStatus,
           nullifier: null,
         };
       }
@@ -489,6 +552,7 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
           verifyStatus: null,
           verifyBody: null,
           errorCode: "missing_nullifier",
+          pollStatus: completion.lastStatus,
           nullifier: null,
         };
       }
@@ -515,8 +579,13 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
         verifyStatus: verifyResponse.status,
         verifyBody,
         errorCode: null,
+        pollStatus: completion.lastStatus,
         nullifier,
       };
     },
   };
 }
+
+export const __testing = {
+  pollWorldApprovalUntilCompletion,
+};

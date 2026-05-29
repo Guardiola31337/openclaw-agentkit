@@ -128,26 +128,50 @@ function createOpenClawConfig({ port, grantsFile }) {
   };
 }
 
-function listActionCommands(approval) {
-  const actions = Array.isArray(approval?.request?.actions) ? approval.request.actions : [];
-  return actions
-    .map((action) => {
-      if (typeof action?.command === "string") {
-        return action.command;
-      }
-      if (typeof action?.commandTemplate === "string") {
-        return action.commandTemplate.replaceAll("{id}", approval.id);
-      }
-      return null;
-    })
-    .filter(Boolean);
+function listApprovalCommands(approval) {
+  const externalCommands = Array.isArray(approval?.request?.externalResolution?.commands)
+    ? approval.request.externalResolution.commands
+        .map((command) => (typeof command?.command === "string" ? command.command : null))
+        .filter(Boolean)
+    : [];
+  const allowedDecisions = Array.isArray(approval?.request?.allowedDecisions)
+    ? approval.request.allowedDecisions
+    : [];
+  const coreCommands = allowedDecisions.map((decision) => `/approve ${approval.id} ${decision}`);
+  return [...externalCommands, ...coreCommands];
 }
 
-async function waitForAgentkitApproval(callGatewayTool) {
+function assertAgentkitApprovalCommands(approval) {
+  assert.equal(approval.request.actions, undefined);
+  assert.deepEqual(approval.request.externalResolution, {
+    label: "Verify with World",
+    commands: [
+      {
+        decision: "allow-once",
+        label: "Verify once",
+        description: "Approve this blocked action only",
+        command: `/agentkit approve ${approval.id} allow-once`,
+      },
+      {
+        decision: "allow-always",
+        label: "Verify and trust for session",
+        description: "Trust approvals for this session",
+        command: `/agentkit approve ${approval.id} allow-always`,
+      },
+    ],
+  });
+  const approvalCommands = listApprovalCommands(approval);
+  assert.deepEqual(approvalCommands, [
+    `/agentkit approve ${approval.id} allow-once`,
+    `/agentkit approve ${approval.id} allow-always`,
+    `/approve ${approval.id} deny`,
+  ]);
+  return approvalCommands;
+}
+
+async function waitForAgentkitApproval(listPendingApprovals) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    const approvals = await callGatewayTool("plugin.approval.list", {
-      timeoutMs: GATEWAY_TIMEOUT_MS,
-    });
+    const approvals = await listPendingApprovals();
     assert.ok(Array.isArray(approvals), "plugin.approval.list should return an array");
     const approval = approvals.find((record) => record?.request?.pluginId === PLUGIN_ID);
     if (approval) {
@@ -183,10 +207,8 @@ async function main() {
   try {
     await mkdir(extensionsDir, { recursive: true });
     await ensureSymlink(repoRoot, pluginInstallDir);
-    await writeFile(
-      configPath,
-      `${JSON.stringify(createOpenClawConfig({ port, grantsFile }), null, 2)}\n`,
-    );
+    const openclawConfig = createOpenClawConfig({ port, grantsFile });
+    await writeFile(configPath, `${JSON.stringify(openclawConfig, null, 2)}\n`);
 
     process.env.OPENCLAW_HOME = tempRoot;
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -205,11 +227,11 @@ async function main() {
       tailscale: { mode: "off" },
     });
 
-    const { callGatewayTool, runBeforeToolCallHook } = await import(
-      "openclaw/plugin-sdk/agent-harness-runtime"
-    );
+    const { runBeforeToolCallHook } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+    const { resolveVerifiedPluginApprovalOverGateway, withOperatorApprovalsGatewayClient } =
+      await import("openclaw/plugin-sdk/gateway-runtime");
 
-    const hookPromise = runBeforeToolCallHook({
+    const denyHookPromise = runBeforeToolCallHook({
       toolName: TOOL_NAME,
       params: { cmd: "echo agentkit" },
       toolCallId: TOOL_CALL_ID,
@@ -220,28 +242,68 @@ async function main() {
       },
     });
 
-    const approval = await waitForAgentkitApproval(callGatewayTool);
-    const actionCommands = listActionCommands(approval);
-    assert.deepEqual(actionCommands, [
-      `/agentkit approve ${approval.id} allow-once`,
-      `/agentkit approve ${approval.id} allow-always`,
-      `/approve ${approval.id} deny`,
-    ]);
-
-    await callGatewayTool(
-      "plugin.approval.resolve",
-      { timeoutMs: GATEWAY_TIMEOUT_MS },
+    const denyApproval = await withOperatorApprovalsGatewayClient(
       {
-        id: approval.id,
-        decision: "deny",
+        config: openclawConfig,
+        clientDisplayName: "AgentKit e2e approval list",
       },
+      async (client) =>
+        await waitForAgentkitApproval(async () => await client.request("plugin.approval.list", {})),
     );
-    const hookResult = await hookPromise;
+    const denyApprovalCommands = assertAgentkitApprovalCommands(denyApproval);
 
-    assert.equal(hookResult?.blocked, true);
-    assert.equal(hookResult?.kind, "failure");
-    assert.equal(hookResult?.deniedReason, "plugin-approval");
-    assert.deepEqual(hookResult?.params, { cmd: "echo agentkit" });
+    await withOperatorApprovalsGatewayClient(
+      {
+        config: openclawConfig,
+        clientDisplayName: "AgentKit e2e core denial",
+      },
+      async (client) =>
+        await client.request("plugin.approval.resolve", {
+          id: denyApproval.id,
+          decision: "deny",
+        }),
+    );
+    const deniedHookResult = await denyHookPromise;
+
+    assert.equal(deniedHookResult?.blocked, true);
+    assert.equal(deniedHookResult?.kind, "failure");
+    assert.equal(deniedHookResult?.deniedReason, "plugin-approval");
+    assert.deepEqual(deniedHookResult?.params, { cmd: "echo agentkit" });
+
+    const allowHookPromise = runBeforeToolCallHook({
+      toolName: TOOL_NAME,
+      params: { cmd: "echo agentkit-allow" },
+      toolCallId: `${TOOL_CALL_ID}-allow`,
+      ctx: {
+        agentId: AGENT_ID,
+        sessionKey: SESSION_KEY,
+        runId: "agentkit-e2e-run-allow",
+      },
+    });
+
+    const allowApproval = await withOperatorApprovalsGatewayClient(
+      {
+        config: openclawConfig,
+        clientDisplayName: "AgentKit e2e allow approval list",
+      },
+      async (client) =>
+        await waitForAgentkitApproval(async () => await client.request("plugin.approval.list", {})),
+    );
+    const allowApprovalCommands = assertAgentkitApprovalCommands(allowApproval);
+
+    await resolveVerifiedPluginApprovalOverGateway({
+      config: openclawConfig,
+      clientDisplayName: "AgentKit e2e verified allow",
+      approvalId: allowApproval.id,
+      decision: "allow-once",
+      pluginId: PLUGIN_ID,
+    });
+    const allowedHookResult = await allowHookPromise;
+    assert.deepEqual(allowedHookResult, {
+      blocked: false,
+      approvalResolution: "allow-once",
+      params: { cmd: "echo agentkit-allow" },
+    });
 
     console.log(
       JSON.stringify(
@@ -249,9 +311,12 @@ async function main() {
           ok: true,
           openclawRoot,
           pluginInstallDir,
-          approvalId: approval.id,
-          actionCommands,
-          hookResult,
+          deniedApprovalId: denyApproval.id,
+          denyApprovalCommands,
+          deniedHookResult,
+          allowedApprovalId: allowApproval.id,
+          allowApprovalCommands,
+          allowedHookResult,
         },
         null,
         2,

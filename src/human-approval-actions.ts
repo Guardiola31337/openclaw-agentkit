@@ -1,18 +1,7 @@
-import type {
-  ExecApprovalActionDescriptor,
-  ExecApprovalDecision,
-} from "openclaw/plugin-sdk/approval-reply-runtime";
+import type { PluginApprovalExternalResolutionTemplate } from "openclaw/plugin-sdk/approval-runtime";
 import type { AgentkitPluginConfig } from "./config.js";
 
 export type HumanApprovalCommandDecision = "allow-always" | "allow-once";
-
-type HumanApprovalActionTemplate = {
-  kind: "decision" | "command";
-  label: string;
-  style: "primary" | "success" | "danger";
-  decision?: ExecApprovalDecision;
-  commandTemplate: string;
-};
 
 export function resolveHumanApprovalPersistentLabel(pluginConfig: AgentkitPluginConfig): string {
   return pluginConfig.hitl.grantScope === "agent"
@@ -20,83 +9,26 @@ export function resolveHumanApprovalPersistentLabel(pluginConfig: AgentkitPlugin
     : "Verify and trust for session";
 }
 
-export function buildHumanApprovalActionTemplates(
-  pluginConfig: AgentkitPluginConfig,
-): HumanApprovalActionTemplate[] {
-  return [
-    {
-      kind: "command",
-      label: "Verify with World (Once)",
-      style: "primary",
-      commandTemplate: "/agentkit approve {id} allow-once",
-    },
-    {
-      kind: "command",
-      label: resolveHumanApprovalPersistentLabel(pluginConfig),
-      style: "success",
-      commandTemplate: "/agentkit approve {id} allow-always",
-    },
-    {
-      kind: "decision",
-      label: "Deny",
-      style: "danger",
-      decision: "deny",
-      commandTemplate: "/approve {id} deny",
-    },
-  ];
+export function buildHumanApprovalExternalResolutionTemplate(): PluginApprovalExternalResolutionTemplate {
+  return {
+    label: "Verify with World",
+    commandTemplate: "/agentkit approve {id} {decision}",
+    decisions: ["allow-once", "allow-always"],
+  };
 }
 
-export function buildHumanApprovalRetryActions(params: {
+export function buildHumanApprovalCommandLines(params: {
   approvalId: string;
   pluginConfig: AgentkitPluginConfig;
-}): ExecApprovalActionDescriptor[] {
+}): string[] {
   return [
-    {
-      kind: "command",
-      label: "Retry with World (Once)",
-      style: "primary",
-      command: `/agentkit approve ${params.approvalId} allow-once`,
-    },
-    {
-      kind: "command",
-      label: resolveHumanApprovalPersistentLabel(params.pluginConfig),
-      style: "success",
-      command: `/agentkit approve ${params.approvalId} allow-always`,
-    },
-    {
-      kind: "decision",
-      label: "Deny",
-      style: "danger",
-      decision: "deny",
-      command: `/approve ${params.approvalId} deny`,
-    },
-  ];
-}
-
-export function buildHumanApprovalPendingActions(params: {
-  approvalId: string;
-  pluginConfig: AgentkitPluginConfig;
-}): ExecApprovalActionDescriptor[] {
-  return [
-    {
-      kind: "command",
-      label: "Verify with World (Once)",
-      style: "primary",
-      command: `/agentkit approve ${params.approvalId} allow-once`,
-    },
-    {
-      kind: "command",
-      label: resolveHumanApprovalPersistentLabel(params.pluginConfig),
-      style: "success",
-      command: `/agentkit approve ${params.approvalId} allow-always`,
-    },
-    {
-      kind: "decision",
-      label: "Deny",
-      style: "danger",
-      decision: "deny",
-      command: `/approve ${params.approvalId} deny`,
-    },
+    "Reply with one of:",
+    "Verify once: Approve this blocked action only",
+    `/agentkit approve ${params.approvalId} allow-once`,
+    `${resolveHumanApprovalPersistentLabel(params.pluginConfig)}: Trust AgentKit approvals for this session`,
+    `/agentkit approve ${params.approvalId} allow-always`,
+    "Deny: Reject this blocked action",
+    `/approve ${params.approvalId} deny`,
   ];
 }
 

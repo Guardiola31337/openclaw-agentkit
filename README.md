@@ -10,10 +10,11 @@ This is a community ClawHub package published as `@guardiola31337/agentkit`. It 
 - Current version: `2026.5.16-beta.2`
 - Channel: community beta
 - Upstream API tracker: `openclaw/openclaw#82336`
-- Required OpenClaw API PRs: `openclaw/openclaw#82431`, `openclaw/openclaw#82434`, `openclaw/openclaw#82471`, and `openclaw/openclaw#82752`
-- Temporary CI host API branch: `Guardiola31337/openclaw@agentkit/external-plugin-host-apis`
+- Required OpenClaw API PR: `openclaw/openclaw#82434`
+- Already on OpenClaw `main`: local approval runtime-token support for plugin approval waits (`openclaw/openclaw#82752` was closed as implemented by `openclaw/openclaw#83433`)
+- Temporary CI host API branch: `Guardiola31337/openclaw@agentkit/external-plugin-host-apis-main`
 
-The package depends on generic OpenClaw host APIs for external approval plugins. Until those APIs are available in an OpenClaw release, test this plugin against an OpenClaw checkout or beta build that includes the approval and chat injection APIs listed in `docs/host-api.md`.
+The package depends on generic OpenClaw host APIs for external approval plugins. Until those APIs are available in an OpenClaw release, test this plugin against an OpenClaw checkout or beta build that includes the approval APIs listed in `docs/host-api.md`.
 
 ## What It Does
 
@@ -151,15 +152,15 @@ From this source checkout, run the complete local AgentKit proof against a
 compatible OpenClaw checkout:
 
 ```sh
-pnpm test:local-full-e2e -- --openclaw ../openclaw-agentkit-host-apis
+pnpm test:local-full-e2e -- --openclaw ../openclaw-agentkit-host-apis-clean
 ```
 
 This builds the OpenClaw checkout, links it into `node_modules/openclaw`, runs
 the plugin's isolated HITL proof, then starts a real local OpenClaw gateway with
 the plugin installed from this checkout. The gateway proof verifies that a
-protected `exec` call creates AgentKit approval actions and that denying the
-approval blocks the tool call. If the OpenClaw checkout is already built, add
-`--skip-host-build`.
+protected `exec` call creates a narrow AgentKit external verification command
+surface, keeps core-owned denial available, and confirms denial blocks the tool
+call. If the OpenClaw checkout is already built, add `--skip-host-build`.
 
 ## License
 

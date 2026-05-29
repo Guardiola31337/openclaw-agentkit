@@ -7,7 +7,7 @@ on:
 
 env:
   OPENCLAW_HOST_API_REPOSITORY: Guardiola31337/openclaw
-  OPENCLAW_HOST_API_REF: agentkit/external-plugin-host-apis
+  OPENCLAW_HOST_API_REF: agentkit/external-plugin-host-apis-main
 
 jobs:
   build:
@@ -35,4 +35,5 @@ jobs:
         working-directory: .openclaw-source
       - run: pnpm dev:link-openclaw .openclaw-source
       - run: pnpm test:hitl
+      - run: pnpm test:openclaw-hitl
       - run: pnpm pack:check

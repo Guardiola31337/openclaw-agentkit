@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createAgentkitCommand, __testing as commandTesting } from "../dist/src/command.js";
+import { __testing as humanApprovalCoreTesting } from "../dist/src/human-approval.js";
 import { createAgentkitBeforeToolCallHook } from "../dist/src/hitl.js";
 import { __testing as humanApprovalTesting } from "../dist/src/human-approval-background.js";
 
@@ -123,6 +124,7 @@ function installMockHumanApprovalRuntime(approvals) {
                 verifyStatus: 200,
                 verifyBody: { success: true },
                 errorCode: null,
+                pollStatus: "confirmed",
                 nullifier: `nullifier-${approvalId}`,
               }),
             );
@@ -164,16 +166,52 @@ async function assertHookRequiresWorldApproval(appConfig) {
   );
   assert.ok(result?.requireApproval, "protected tool should require plugin approval");
   assert.equal(result.requireApproval.pluginId, "agentkit");
-  assert.equal(result.requireApproval.keepPendingWithoutRoute, true);
   assert.deepEqual(result.requireApproval.allowedDecisions, ["deny"]);
+  assert.deepEqual(result.requireApproval.externalResolution, {
+    label: "Verify with World",
+    commandTemplate: "/agentkit approve {id} {decision}",
+    decisions: ["allow-once", "allow-always"],
+  });
+  assert.equal(result.requireApproval.actions, undefined);
+  assert.equal(result.requireApproval.keepPendingWithoutRoute, undefined);
+}
+
+async function assertWorldReplyIncludesAppDownload(appConfig) {
+  const approval = createPendingApproval("approval-download");
+  const runtime = installMockHumanApprovalRuntime([approval]);
+  const command = createAgentkitCommand(createApi(appConfig));
+
+  const reply = await command.handler({
+    args: "approve approval-download allow-once",
+    config: appConfig,
+    sessionKey: SESSION_KEY,
+  });
+  assert.match(reply.text, /Scan with World App/);
+  assert.match(reply.text, /Download World App: https:\/\/world\.org\/world-app/);
   assert.deepEqual(
-    result.requireApproval.actions.map((action) => action.commandTemplate),
-    [
-      "/agentkit approve {id} allow-once",
-      "/agentkit approve {id} allow-always",
-      "/approve {id} deny",
-    ],
+    runtime.resolved,
+    [],
+    "starting the World flow should not resolve the approval before proof succeeds",
   );
+}
+
+async function assertWorldPollTimeoutReportsLastStatus() {
+  let pollCount = 0;
+  const result = await humanApprovalCoreTesting.pollWorldApprovalUntilCompletion({
+    request: {
+      pollOnce: async () => {
+        pollCount += 1;
+        return { type: pollCount === 1 ? "waiting_for_connection" : "awaiting_confirmation" };
+      },
+    },
+    timeoutMs: 1_000,
+    pollIntervalMs: 250,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.error, "timeout_awaiting_confirmation");
+  assert.equal(result.lastStatus, "awaiting_confirmation");
+  assert.ok(pollCount > 1);
 }
 
 async function assertAllowOnceResolvesSelectedApproval(appConfig) {
@@ -198,6 +236,28 @@ async function assertAllowOnceResolvesSelectedApproval(appConfig) {
     },
   ]);
   assert.deepEqual(runtime.injected, []);
+}
+
+async function assertExplicitApprovalIdWorksWhenListIsHidden(appConfig) {
+  const runtime = installMockHumanApprovalRuntime([]);
+  const command = createAgentkitCommand(createApi(appConfig));
+
+  const reply = await command.handler({
+    args: "approve approval-hidden allow-once",
+    config: appConfig,
+    sessionKey: SESSION_KEY,
+  });
+  assert.match(reply.text, /Verify with World/);
+  assert.match(reply.text, /Approval: approval-hidden/);
+
+  runtime.completeWorldApproval("approval-hidden");
+  await waitForBackgroundCompletion("approval-hidden");
+  assert.deepEqual(runtime.resolved, [
+    {
+      approvalId: "approval-hidden",
+      decision: "allow-once",
+    },
+  ]);
 }
 
 async function assertAllowAlwaysPersistsGrantAndResolvesMatchingApprovals(appConfig, grantsFile) {
@@ -254,8 +314,11 @@ async function main() {
   const appConfig = createConfig(grantsFile);
   try {
     await assertHookRequiresWorldApproval(appConfig);
+    await assertWorldReplyIncludesAppDownload(appConfig);
     await assertAllowOnceResolvesSelectedApproval(appConfig);
+    await assertExplicitApprovalIdWorksWhenListIsHidden(appConfig);
     await assertAllowAlwaysPersistsGrantAndResolvesMatchingApprovals(appConfig, grantsFile);
+    await assertWorldPollTimeoutReportsLastStatus();
   } finally {
     commandTesting.resetAgentkitCommandRuntimeDeps();
     humanApprovalTesting.resetHumanApprovalRuntimeDeps();

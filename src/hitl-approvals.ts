@@ -22,7 +22,7 @@ export type AgentkitPendingApproval = {
   };
 };
 
-function asPendingApproval(value: unknown): AgentkitPendingApproval | null {
+export function parseAgentkitPendingApproval(value: unknown): AgentkitPendingApproval | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -76,7 +76,7 @@ export async function listPendingAgentkitApprovals(params: {
         return [];
       }
       return raw
-        .map(asPendingApproval)
+        .map(parseAgentkitPendingApproval)
         .filter(
           (entry): entry is AgentkitPendingApproval => entry?.request.pluginId === "agentkit",
         );
@@ -154,7 +154,7 @@ export function filterMatchingPendingAgentkitApprovals(params: {
 export async function resolvePendingAgentkitApproval(params: {
   appConfig: OpenClawConfig;
   approvalId: string;
-  decision: ExecApprovalDecision;
+  decision: Extract<ExecApprovalDecision, "allow-once" | "allow-always">;
   gatewayUrl?: string;
 }): Promise<void> {
   await resolveVerifiedPluginApprovalOverGateway({
@@ -165,6 +165,26 @@ export async function resolvePendingAgentkitApproval(params: {
     decision: params.decision,
     pluginId: "agentkit",
   });
+}
+
+export async function denyPendingAgentkitApproval(params: {
+  appConfig: OpenClawConfig;
+  approvalId: string;
+  gatewayUrl?: string;
+}): Promise<void> {
+  await withOperatorApprovalsGatewayClient(
+    {
+      config: params.appConfig,
+      gatewayUrl: params.gatewayUrl,
+      clientDisplayName: "AgentKit approval denial",
+    },
+    async (client) => {
+      await client.request("plugin.approval.resolve", {
+        id: params.approvalId,
+        decision: "deny",
+      });
+    },
+  );
 }
 
 export function formatPendingAgentkitApprovalsText(

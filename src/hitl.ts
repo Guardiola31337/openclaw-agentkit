@@ -6,7 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredAgentkitPluginConfig } from "./config.js";
 import { applyAgentkitHitlGrant, type AgentkitHitlGrantScope } from "./hitl-grants.js";
-import { buildHumanApprovalActionTemplates } from "./human-approval-actions.js";
+import { buildHumanApprovalExternalResolutionTemplate } from "./human-approval-actions.js";
 import { resolveAgentkitHumanApprovalRequestConfig } from "./human-approval.js";
 
 const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
@@ -37,7 +37,7 @@ function buildApprovalDescription(params: {
     params.hitlMode === "human-approval"
       ? [
           `Verify with World before \`${params.toolName}\` runs in ${scopeLabel}.`,
-          "Use the approval actions below, or list pending requests with `/agentkit approvals`.",
+          "Use the verification commands below, or list pending requests with `/agentkit approvals`.",
         ]
       : [
           `World proof of human is required before \`${params.toolName}\` can run for ${scopeLabel}.`,
@@ -122,7 +122,7 @@ export function createAgentkitBeforeToolCallHook(
         pluginId: "agentkit",
         ...(pluginConfig.hitl.mode === "human-approval"
           ? {
-              actions: buildHumanApprovalActionTemplates(pluginConfig),
+              externalResolution: buildHumanApprovalExternalResolutionTemplate(),
             }
           : {}),
         title: `World proof required for ${ctx.toolName}`,
@@ -135,7 +135,6 @@ export function createAgentkitBeforeToolCallHook(
         severity: pluginConfig.hitl.severity,
         timeoutMs: pluginConfig.hitl.timeoutMs,
         allowedDecisions: ["deny"],
-        keepPendingWithoutRoute: true,
       },
     };
   };

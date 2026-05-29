@@ -7,6 +7,7 @@ import {
   resolveRequestedAgentkitApproval,
   type AgentkitPendingApproval,
 } from "./hitl-approvals.js";
+import { resolveOpenClawGatewayUrlFromEnv } from "./gateway-url.js";
 import {
   resolveHumanApprovalApprovalIdToken,
   resolveHumanApprovalCommandDecision,
@@ -66,10 +67,26 @@ function resolveChatApprovalSelection(params: {
   sessionKey?: string;
 }): AgentkitPendingApproval {
   if (params.approvalId) {
-    return resolveRequestedAgentkitApproval({
-      approvals: params.approvals,
-      approvalId: params.approvalId,
-    });
+    const pendingMatch = params.approvals.find((approval) => approval.id === params.approvalId);
+    if (pendingMatch) {
+      return pendingMatch;
+    }
+    const nowMs = Date.now();
+    return {
+      id: params.approvalId,
+      createdAtMs: nowMs,
+      expiresAtMs: nowMs + 10 * 60 * 1000,
+      request: {
+        pluginId: "agentkit",
+        title: "World proof required",
+        description: "Verify with World before this protected action continues.",
+        severity: "warning",
+        toolName: null,
+        toolCallId: null,
+        agentId: null,
+        sessionKey: params.sessionKey ?? null,
+      },
+    };
   }
   if (params.sessionKey) {
     const sessionMatches = params.approvals.filter(
@@ -84,7 +101,7 @@ function resolveChatApprovalSelection(params: {
   });
 }
 
-function formatHumanApprovalReply(params: {
+export function formatHumanApprovalReply(params: {
   approvalId: string;
   connectorURI: string;
   decision: "allow-once" | "allow-always";
@@ -106,7 +123,8 @@ function formatHumanApprovalReply(params: {
   );
   if (params.qrText) {
     lines.push("");
-    lines.push("Scan with World App:");
+    lines.push("Scan with World App");
+    lines.push("Download World App: https://world.org/world-app");
     lines.push(buildFence(params.qrText));
   }
   lines.push("");
@@ -130,6 +148,7 @@ export function createAgentkitCommand(api: OpenClawPluginApi): OpenClawPluginCom
         env: process.env,
       });
       const statusText = formatAgentkitStatusText(status);
+      const gatewayUrl = resolveOpenClawGatewayUrlFromEnv(process.env);
 
       if (!action || action === "help") {
         return { text: formatUsage(statusText) };
@@ -153,6 +172,7 @@ export function createAgentkitCommand(api: OpenClawPluginApi): OpenClawPluginCom
       if (action === "approvals") {
         const approvals = await agentkitCommandRuntimeDeps.listPendingApprovals({
           appConfig,
+          gatewayUrl,
         });
         return {
           text: formatPendingAgentkitApprovalsText(approvals),
@@ -174,6 +194,7 @@ export function createAgentkitCommand(api: OpenClawPluginApi): OpenClawPluginCom
 
         const approvals = await agentkitCommandRuntimeDeps.listPendingApprovals({
           appConfig,
+          gatewayUrl,
         });
         const trailingTokens = rawTokens.slice(1);
         const approvalToken = resolveHumanApprovalApprovalIdToken(trailingTokens) ?? "";
@@ -189,6 +210,7 @@ export function createAgentkitCommand(api: OpenClawPluginApi): OpenClawPluginCom
             approval,
             decision,
             env: process.env,
+            gatewayUrl,
             logger: api.logger,
             pluginConfig,
           });

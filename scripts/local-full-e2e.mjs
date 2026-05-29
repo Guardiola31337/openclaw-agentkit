@@ -13,7 +13,7 @@ function usage() {
 Runs the local AgentKit proof against a compatible OpenClaw checkout.
 
 Options:
-  --openclaw <path>     OpenClaw checkout to link. Defaults to ../openclaw-agentkit-host-apis, then ../openclaw.
+  --openclaw <path>     OpenClaw checkout to link. Defaults to ../openclaw-agentkit-host-apis-clean, then ../openclaw.
   --skip-host-build     Do not run pnpm build in the OpenClaw checkout first.
   --skip-link           Do not replace node_modules/openclaw with a symlink.
   --help                Show this help.
@@ -74,7 +74,7 @@ async function exists(filePath) {
 async function resolveOpenClawPath(openclawArg) {
   const candidates = openclawArg
     ? [openclawArg]
-    : ["../openclaw-agentkit-host-apis", "../openclaw"];
+    : ["../openclaw-agentkit-host-apis-clean", "../openclaw"];
 
   for (const candidate of candidates) {
     const candidatePath = path.resolve(repoRoot, candidate);

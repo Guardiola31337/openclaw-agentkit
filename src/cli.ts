@@ -1,18 +1,13 @@
 import type { Command } from "commander";
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import type { OpenClawPluginCliCommandDescriptor } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredAgentkitPluginConfig } from "./config.js";
 import {
-  filterMatchingPendingAgentkitApprovals,
+  denyPendingAgentkitApproval,
   formatPendingAgentkitApprovalsText,
   listPendingAgentkitApprovals,
-  resolvePendingAgentkitApproval,
   resolveRequestedAgentkitApproval,
-  type AgentkitPendingApproval,
 } from "./hitl-approvals.js";
-import { saveAgentkitHitlGrant } from "./hitl-grants.js";
-import { runAgentkitWorldHumanApproval } from "./human-approval.js";
 import { resolveAgentkitHumanLookup } from "./human-lookup.js";
 import {
   formatAgentkitProtectedRequestResult,
@@ -39,28 +34,11 @@ import {
   verifyAgentkitHeader,
 } from "./verify.js";
 
-export const AGENTKIT_CLI_DESCRIPTOR: OpenClawPluginCliCommandDescriptor = {
+export const AGENTKIT_CLI_DESCRIPTOR = {
   name: "agentkit",
   description: "Inspect World AgentKit readiness, registration, and verifier flows",
   hasSubcommands: true,
-};
-
-function resolveHumanLookupModeFromResponse(responseBody: unknown): string | null {
-  if (!responseBody || typeof responseBody !== "object" || Array.isArray(responseBody)) {
-    return null;
-  }
-  const report = (responseBody as { report?: unknown }).report;
-  if (!report || typeof report !== "object" || Array.isArray(report)) {
-    return null;
-  }
-  const humanLookup = (report as { humanLookup?: unknown }).humanLookup;
-  if (!humanLookup || typeof humanLookup !== "object" || Array.isArray(humanLookup)) {
-    return null;
-  }
-  return typeof (humanLookup as { mode?: unknown }).mode === "string"
-    ? ((humanLookup as { mode: string }).mode ?? null)
-    : null;
-}
+} as const;
 
 async function runAgentkitStatus(appConfig: OpenClawConfig, opts: { json?: boolean }) {
   const status = await resolveAgentkitStatus({ appConfig, env: process.env });
@@ -188,6 +166,7 @@ async function runAgentkitVerifierRequestCommand(opts: {
 }
 
 async function runAgentkitProtectedRequestCommand(opts: {
+  gatewayCertificateFile?: string;
   resource: string;
   privateKey?: string;
   privateKeyFile?: string;
@@ -200,6 +179,7 @@ async function runAgentkitProtectedRequestCommand(opts: {
   const result = await requestAgentkitProtectedResource({
     resourceUrl: opts.resource,
     signerKeyHex: privateKey,
+    gatewayCertificateFile: opts.gatewayCertificateFile,
   });
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -209,11 +189,14 @@ async function runAgentkitProtectedRequestCommand(opts: {
 }
 
 async function runAgentkitApprovalsCommand(
-  appConfig: OpenClawConfig,
-  opts: { gatewayUrl?: string; json?: boolean },
+  opts: {
+    gatewayToken?: string;
+    gatewayUrl?: string;
+    json?: boolean;
+  },
 ) {
   const approvals = await listPendingAgentkitApprovals({
-    appConfig,
+    gatewayToken: opts.gatewayToken,
     gatewayUrl: opts.gatewayUrl,
   });
   if (opts.json) {
@@ -223,41 +206,12 @@ async function runAgentkitApprovalsCommand(
   console.log(formatPendingAgentkitApprovalsText(approvals));
 }
 
-async function resolveMatchingCliApprovals(params: {
-  appConfig: OpenClawConfig;
-  approvals: AgentkitPendingApproval[];
-  approval: AgentkitPendingApproval;
-  gatewayUrl?: string;
-  pluginConfig: ReturnType<typeof resolveConfiguredAgentkitPluginConfig>;
-}): Promise<{ failed: number; resolved: number }> {
-  const matching = filterMatchingPendingAgentkitApprovals({
-    approvals: params.approvals,
-    approval: params.approval,
-    pluginConfig: params.pluginConfig,
-  });
-  let failed = 0;
-  await Promise.all(
-    matching.map(async (approval) => {
-      try {
-        await resolvePendingAgentkitApproval({
-          appConfig: params.appConfig,
-          approvalId: approval.id,
-          decision: "allow-always",
-          gatewayUrl: params.gatewayUrl,
-        });
-      } catch {
-        failed += 1;
-      }
-    }),
-  );
-  return { failed, resolved: matching.length - failed };
-}
-
 async function runAgentkitApproveCommand(
   appConfig: OpenClawConfig,
   opts: {
     approvalId?: string;
     decision?: ExecApprovalDecision;
+    gatewayToken?: string;
     gatewayUrl?: string;
     json?: boolean;
     privateKey?: string;
@@ -267,7 +221,7 @@ async function runAgentkitApproveCommand(
 ) {
   const pluginConfig = resolveConfiguredAgentkitPluginConfig(appConfig);
   const approvals = await listPendingAgentkitApprovals({
-    appConfig,
+    gatewayToken: opts.gatewayToken,
     gatewayUrl: opts.gatewayUrl,
   });
   const approval = resolveRequestedAgentkitApproval({
@@ -281,17 +235,10 @@ async function runAgentkitApproveCommand(
     );
   }
   const decision = rawDecision;
-  const canPersistGrant =
-    pluginConfig.hitl.grantScope === "agent"
-      ? approval.request.agentId != null
-      : approval.request.sessionKey != null;
-  const shouldPersistGrant = decision === "allow-always" && canPersistGrant;
-
   if (decision === "deny") {
-    await resolvePendingAgentkitApproval({
-      appConfig,
+    await denyPendingAgentkitApproval({
       approvalId: approval.id,
-      decision,
+      gatewayToken: opts.gatewayToken,
       gatewayUrl: opts.gatewayUrl,
     });
     const payload = {
@@ -313,198 +260,9 @@ async function runAgentkitApproveCommand(
     return;
   }
 
-  if (pluginConfig.hitl.mode === "human-approval") {
-    if (opts.privateKey || opts.privateKeyFile) {
-      throw new Error(
-        "Private key options are only valid in delegation mode. Human approval mode uses a World ID QR/link instead.",
-      );
-    }
-    const approvalResult = await runAgentkitWorldHumanApproval({
-      approval,
-      pluginConfig,
-      env: process.env,
-      logLine: opts.json ? () => {} : console.log,
-      onPending: opts.json
-        ? (session) => {
-            console.log(
-              JSON.stringify({
-                status: "pending",
-                approvalId: approval.id,
-                decision,
-                mode: pluginConfig.hitl.mode,
-                connectorURI: session.connectorURI,
-                requestId: session.requestId,
-                action: session.action,
-              }),
-            );
-          }
-        : undefined,
-      renderQrCode: opts.json ? async () => {} : undefined,
-      timeoutMs: pluginConfig.hitl.timeoutMs,
-    });
-    if (!approvalResult.success) {
-      const code = approvalResult.errorCode
-        ? `World approval did not complete successfully (${approvalResult.errorCode}).`
-        : `World approval verification failed with status ${approvalResult.verifyStatus}.`;
-      throw new Error(`${code} The pending OpenClaw approval was left unresolved.`);
-    }
-
-    await resolvePendingAgentkitApproval({
-      appConfig,
-      approvalId: approval.id,
-      decision,
-      gatewayUrl: opts.gatewayUrl,
-    });
-    const matchingResolution = shouldPersistGrant
-      ? await resolveMatchingCliApprovals({
-          appConfig,
-          approvals,
-          approval,
-          gatewayUrl: opts.gatewayUrl,
-          pluginConfig,
-        })
-      : { failed: 0, resolved: 0 };
-    if (shouldPersistGrant) {
-      const nowMs = Date.now();
-      saveAgentkitHitlGrant({
-        appConfig,
-        pluginConfig,
-        grant: {
-          id: `${approval.id}:${decision}`,
-          approvalMode: "human-approval",
-          resourceUrl: null,
-          decision,
-          scope: {
-            toolName: approval.request.toolName ?? "unknown",
-            sessionKey: approval.request.sessionKey,
-            agentId: approval.request.agentId,
-          },
-          humanLookupMode: "world-id",
-          signerAddress: null,
-          proofNullifier: approvalResult.nullifier,
-          grantedAtMs: nowMs,
-          expiresAtMs: decision === "allow-always" ? nowMs + pluginConfig.hitl.grantTtlMs : null,
-          consumedAtMs: null,
-        },
-      });
-    }
-
-    const payload = {
-      status: "resolved",
-      approvalId: approval.id,
-      decision,
-      mode: pluginConfig.hitl.mode,
-      connectorURI: approvalResult.connectorURI,
-      requestId: approvalResult.requestId,
-      action: approvalResult.action,
-      verifyStatus: approvalResult.verifyStatus,
-      grantStored: shouldPersistGrant,
-      matchingApprovalsResolved: matchingResolution.resolved,
-      matchingApprovalsFailed: matchingResolution.failed,
-    };
-    if (opts.json) {
-      console.log(JSON.stringify(payload));
-      return;
-    }
-    console.log("AgentKit approval resolved");
-    console.log(`- approval id: ${payload.approvalId}`);
-    console.log(`- decision: ${payload.decision}`);
-    console.log(`- mode: ${payload.mode}`);
-    console.log(`- world request id: ${payload.requestId}`);
-    console.log(`- verification status: ${payload.verifyStatus}`);
-    console.log(`- delegation grant stored: ${payload.grantStored ? "yes" : "no"}`);
-    if (payload.matchingApprovalsResolved > 0 || payload.matchingApprovalsFailed > 0) {
-      console.log(`- matching approvals resolved: ${payload.matchingApprovalsResolved}`);
-      console.log(`- matching approvals failed: ${payload.matchingApprovalsFailed}`);
-    }
-    return;
-  }
-
-  const privateKey = await resolveAgentkitPrivateKeyValue({
-    privateKey: opts.privateKey,
-    privateKeyFile: opts.privateKeyFile,
-  });
-  const resourceUrl = opts.resource ?? pluginConfig.hitl.resourceUrl;
-  if (!resourceUrl) {
-    throw new Error(
-      "AgentKit approval resource URL is not configured. Set plugins.entries.agentkit.config.hitl.resourceUrl or pass --resource <url>.",
-    );
-  }
-  const protectedRequest = await requestAgentkitProtectedResource({
-    resourceUrl,
-    signerKeyHex: privateKey,
-  });
-  if (protectedRequest.finalStatus !== 200) {
-    throw new Error(
-      `AgentKit proof-backed request failed with status ${protectedRequest.finalStatus}; approval was not resolved.`,
-    );
-  }
-  await resolvePendingAgentkitApproval({
-    appConfig,
-    approvalId: approval.id,
-    decision,
-    gatewayUrl: opts.gatewayUrl,
-  });
-  const matchingResolution = shouldPersistGrant
-    ? await resolveMatchingCliApprovals({
-        appConfig,
-        approvals,
-        approval,
-        gatewayUrl: opts.gatewayUrl,
-        pluginConfig,
-      })
-    : { failed: 0, resolved: 0 };
-  if (shouldPersistGrant) {
-    const nowMs = Date.now();
-    saveAgentkitHitlGrant({
-      appConfig,
-      pluginConfig,
-      grant: {
-        id: `${approval.id}:${decision}`,
-        approvalMode: "delegation",
-        resourceUrl,
-        decision,
-        scope: {
-          toolName: approval.request.toolName ?? "unknown",
-          sessionKey: approval.request.sessionKey,
-          agentId: approval.request.agentId,
-        },
-        humanLookupMode: resolveHumanLookupModeFromResponse(protectedRequest.responseBody),
-        signerAddress: protectedRequest.signerAddress,
-        proofNullifier: null,
-        grantedAtMs: nowMs,
-        expiresAtMs: decision === "allow-always" ? nowMs + pluginConfig.hitl.grantTtlMs : null,
-        consumedAtMs: null,
-      },
-    });
-  }
-
-  const payload = {
-    approvalId: approval.id,
-    decision,
-    mode: pluginConfig.hitl.mode,
-    resourceUrl,
-    signerAddress: protectedRequest.signerAddress,
-    finalStatus: protectedRequest.finalStatus,
-    grantStored: shouldPersistGrant,
-    matchingApprovalsResolved: matchingResolution.resolved,
-    matchingApprovalsFailed: matchingResolution.failed,
-  };
-  if (opts.json) {
-    console.log(JSON.stringify(payload, null, 2));
-    return;
-  }
-  console.log("AgentKit approval resolved");
-  console.log(`- approval id: ${payload.approvalId}`);
-  console.log(`- decision: ${payload.decision}`);
-  console.log(`- mode: ${payload.mode}`);
-  console.log(`- protected resource: ${payload.resourceUrl}`);
-  console.log(`- signer address: ${payload.signerAddress}`);
-  console.log(`- delegation grant stored: ${payload.grantStored ? "yes" : "no"}`);
-  if (payload.matchingApprovalsResolved > 0 || payload.matchingApprovalsFailed > 0) {
-    console.log(`- matching approvals resolved: ${payload.matchingApprovalsResolved}`);
-    console.log(`- matching approvals failed: ${payload.matchingApprovalsFailed}`);
-  }
+  throw new Error(
+    "Verification must start from the authenticated OpenClaw approval prompt. Run its canonical external command, then follow the World QR or signed AgentKit resource instruction it presents. The CLI cannot claim plugin identity or resolve an allow decision directly.",
+  );
 }
 
 export function registerAgentkitCli(program: Command, appConfig: OpenClawConfig) {
@@ -534,21 +292,27 @@ export function registerAgentkitCli(program: Command, appConfig: OpenClawConfig)
     .command("approvals")
     .description("List pending AgentKit-backed OpenClaw plugin approvals")
     .option("--gateway-url <url>", "Override the gateway URL used for approval lookup")
+    .option("--gateway-token <token>", "Gateway token required with an explicit gateway URL")
     .option("--json", "Print JSON")
-    .action(async (opts: { gatewayUrl?: string; json?: boolean }) => {
-      await runAgentkitApprovalsCommand(appConfig, opts);
-    });
+    .action(
+      async (opts: {
+        gatewayToken?: string;
+        gatewayUrl?: string;
+        json?: boolean;
+      }) => {
+        await runAgentkitApprovalsCommand(opts);
+      },
+    );
 
   agentkit
     .command("approve")
-    .description(
-      "Resolve a pending AgentKit plugin approval using either delegation mode or a World QR approval flow",
-    )
+    .description("Resolve a delegation-mode approval after AgentKit proof verification")
     .option("--approval-id <id>", "Specific pending AgentKit approval id to resolve")
     .option("--resource <url>", "Protected resource URL to verify before resolving approval")
     .option("--private-key <hex>", "Use a specific EVM private key instead of generating one")
     .option("--private-key-file <path>", "Read the private key from a file or `-` for stdin")
     .option("--gateway-url <url>", "Override the gateway URL used for approval resolution")
+    .option("--gateway-token <token>", "Gateway token required with an explicit gateway URL")
     .option(
       "--decision <decision>",
       "Approval decision to apply after proof verification (allow-once|allow-always|deny)",
@@ -559,6 +323,7 @@ export function registerAgentkitCli(program: Command, appConfig: OpenClawConfig)
       async (opts: {
         approvalId?: string;
         decision?: ExecApprovalDecision;
+        gatewayToken?: string;
         gatewayUrl?: string;
         json?: boolean;
         privateKey?: string;
@@ -665,11 +430,13 @@ export function registerAgentkitCli(program: Command, appConfig: OpenClawConfig)
       "Request an AgentKit-protected resource by fetching a challenge and attaching a signed header",
     )
     .requiredOption("--resource <url>", "Protected resource URL")
+    .option("--gateway-certificate-file <path>", "Leaf certificate for a TLS Gateway resource")
     .option("--private-key <hex>", "Use a specific EVM private key instead of generating one")
     .option("--private-key-file <path>", "Read the private key from a file or `-` for stdin")
     .option("--json", "Print JSON")
     .action(
       async (opts: {
+        gatewayCertificateFile?: string;
         resource: string;
         privateKey?: string;
         privateKeyFile?: string;

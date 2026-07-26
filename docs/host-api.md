@@ -1,31 +1,105 @@
 # Required OpenClaw Host APIs
 
-This package is intentionally outside OpenClaw core. It needs generic OpenClaw plugin host APIs so an external plugin can manage a protected-tool approval lifecycle without importing OpenClaw internals.
+AgentKit remains outside OpenClaw core. It uses the generic, plugin-bound
+external verification contract accepted in
+[openclaw/rfcs#15](https://github.com/openclaw/rfcs/pull/15).
 
-Upstream tracker: https://github.com/openclaw/openclaw/issues/82336
+Implementation and runtime proof are tracked in
+[openclaw/openclaw#82336](https://github.com/openclaw/openclaw/issues/82336).
 
-Current upstream split:
+## Required surface
 
-- https://github.com/openclaw/openclaw/pull/82431 exposes plugin approval actions and no-route pending approvals.
-- https://github.com/openclaw/openclaw/pull/82434 exposes narrow verified plugin approval resolution.
-- https://github.com/openclaw/openclaw/pull/82471 exposes durable `chat.inject` metadata and a narrow chat injection helper for approval-card retry prompts.
-- https://github.com/openclaw/openclaw/pull/82752 lets local plugin approval gateway calls use the operator approval runtime token.
+The plugin requires these OpenClaw contracts:
 
-Until those PRs land, CI links against `Guardiola31337/openclaw@agentkit/external-plugin-host-apis`, a temporary branch that combines those host API changes for this external plugin.
+- A `before_tool_call` approval may declare
+  `externalResolution: { label, decisions? }`. The hook does not supply
+  `pluginId`; OpenClaw stamps plugin, run, tool, session, and approval identity.
+- Generic resolution remains deny-only while an external verifier owns the
+  allow path.
+- `api.approvals.onExternalVerification(handler)` registers exactly one verifier
+  for the plugin.
+- The handler receives an immutable attempt context, an `AbortSignal`, and
+  `present(...)`. It presents the challenge, starts cancellable verification
+  work, and returns without holding the host dispatch path open.
+- `api.approvals.completeExternalVerification(...)` completes only an attempt
+  owned by the calling plugin. Completion is idempotent and first-answer-wins
+  with deny, timeout, cancellation, and shutdown.
+- Successful `allow-always` completion may return a stable
+  `grantAuthorization`. `api.approvals.openGrantStore()` provides bounded
+  plugin-owned storage for that authorization and its tombstones.
+- The canonical text command binds the approval, reviewer, decision, plugin,
+  run, and message interaction before dispatch. Redelivery reuses the attempt;
+  a newly sent command is an explicit retry.
 
-## Required Surface
+The command does not expose a plugin resolver. Gateway callers cannot claim a
+plugin identity or complete an attempt, and the plugin cannot resolve an
+approval through the ordinary public approval RPC.
 
-- `before_tool_call` result support for plugin-provided approval action descriptors, such as `Verify with World`.
-- Pending plugin approvals that can stay pending without an active approval route.
-- Verified approval resolution scoped to the originating plugin id.
-- A narrow chat injection helper for trusted plugin approval/status prompts.
-- Transcript injection metadata for approval-card retry prompts.
-- Turn-source metadata propagation through the approval path so channel-originated approvals can return to the correct target.
-- Local approval list/resolve/wait calls from the agent harness must be able to authenticate against the local gateway without exposing broad operator credentials to the plugin.
+## Approval controls
 
-## Current Testing Strategy
+OpenClaw renders these canonical commands. The first line is
+`Verify with World` in `human-approval` mode and
+`Verify AgentKit delegation` in `delegation` mode:
 
-Until those APIs ship in OpenClaw, test against an OpenClaw checkout that includes the API branch:
+```text
+<plugin verification label>
+Verify once: `/approve plugin:<id> external allow-once`
+Verify and trust for session: `/approve plugin:<id> external allow-always`
+
+Deny: `/approve plugin:<id> deny`
+```
+
+Repeating the same command interaction replays its immutable result. Sending
+the command from a new interaction creates a fresh attempt and cancels any
+active attempt for that approval. A stale retry cannot cancel a newer attempt.
+
+## Delegation ceremony
+
+Delegation mode uses the same host-bound attempt contract. After the reviewer
+sends the canonical command, AgentKit presents a one-use loopback resource
+command:
+
+```sh
+openclaw agentkit request --resource https://127.0.0.1:<port>/plugins/agentkit/external-verification/<token> --gateway-certificate-file <gateway-cert.pem> --private-key-file <path>
+```
+
+The plugin route creates the signed-resource challenge, verifies the returned
+AgentKit header and AgentBook human lookup inside the running plugin instance,
+then calls `completeExternalVerification(...)`. The ordinary approval RPC
+remains deny-only. The route token is bound to one active attempt, disappears
+on completion or abort, and never sends proof material into OpenClaw core.
+When Gateway TLS is disabled, the generated resource uses loopback HTTP and
+omits `--gateway-certificate-file`. With TLS enabled, that option is restricted
+to the loopback resource and pins the exact configured Gateway leaf
+certificate. A challenge cannot redirect the signed header to another URL.
+
+`openclaw agentkit approve` remains available for denial and compatibility
+guidance, but it cannot submit an allow decision.
+
+Approval lookup and denial use OpenClaw's configured Gateway URL and
+credentials. An explicit `--gateway-url` must be paired with
+`--gateway-token`; prefer configured credentials or environment indirection so
+secrets do not appear in the process list.
+
+## Grant contract
+
+AgentKit persists only host-authorized grant metadata:
+
+- stable grant authorization id and issue time;
+- originating approval and attempt ids;
+- exact protected tool;
+- exact session key and ephemeral session id;
+- expiry and terminal status.
+
+It does not persist World proof material or proof nullifiers. Expired, revoked,
+consumed, and reset grants become terminal tombstones and cannot be recreated
+from a replayed completion. Reset boundaries include explicit `new`/`reset`,
+automatic `idle`/`daily` rollover, and session deletion; compaction and Gateway
+restart/shutdown do not revoke an otherwise valid grant.
+
+## Test against a source checkout
+
+Until the API ships in an OpenClaw release, link a compatible checkout:
 
 ```sh
 pnpm install
@@ -35,14 +109,22 @@ pnpm test:hitl
 pnpm test:openclaw-hitl
 ```
 
-`test:hitl` covers the plugin's local HITL logic with mocked host dependencies. `test:openclaw-hitl` starts a real OpenClaw gateway, installs this checkout as an external plugin under a temporary OpenClaw state directory, runs the `before_tool_call` hook for protected tool `exec`, verifies the pending approval actions, denies the approval through `plugin.approval.resolve`, and asserts the hook blocks with `deniedReason: "plugin-approval"`.
+`test:hitl` proves the plugin contract with deterministic host, AgentKit, and
+World fixtures. `test:openclaw-hitl` builds an isolated state directory,
+installs this checkout as an external plugin, starts a real built OpenClaw
+Gateway, and drives the real approval broker plus `before_tool_call` hook. Only
+World transport is mocked. The delegation lane starts a self-signed TLS Gateway
+and proves the unsigned challenge, signed retry, and plugin-bound completion.
 
-From this source checkout, run the full local flow in one command:
+Run the complete local flow in one command:
 
 ```sh
-pnpm test:local-full-e2e -- --openclaw ../openclaw-agentkit-host-apis
+pnpm test:local-full-e2e -- --openclaw ../openclaw
 ```
 
-Use `--skip-host-build` when the linked OpenClaw checkout is already built.
+Use `--skip-host-build` when the linked checkout is already built. Keep the
+manual production ceremony, redacted capture, and local secret mapping on the
+implementation discussion rather than in the package source.
 
-Once OpenClaw publishes a compatible beta or stable release, replace the local link with the released `openclaw` package and update `package.json` compatibility metadata.
+After OpenClaw publishes a compatible beta or stable release, replace the local
+link with that package and update `package.json` compatibility metadata.

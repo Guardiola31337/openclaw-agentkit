@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { awaitWithAbort } from "./abort.js";
 import type { AgentkitPluginConfig } from "./config.js";
 import type { AgentkitPendingApproval } from "./hitl-approvals.js";
 import { renderQrCodeInTerminal } from "./qr.runtime.js";
@@ -45,6 +46,7 @@ export type AgentkitHumanApprovalSessionResult = {
   verifyStatus: number | null;
   verifyBody: unknown;
   errorCode: string | null;
+  pollStatus: string | null;
   nullifier: string | null;
 };
 
@@ -63,6 +65,11 @@ export type AgentkitHumanApprovalPendingSession = Omit<
 
 type FetchImpl = typeof fetch;
 type UnknownRecord = Record<string, unknown>;
+type WorldApprovalPollStatus = {
+  type?: string;
+  result?: unknown;
+  error?: string;
+};
 
 function asRecord(value: unknown): UnknownRecord | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -183,8 +190,11 @@ function parseHostedBrokerSignature(params: {
     environmentRaw === "production" || environmentRaw === "staging"
       ? environmentRaw
       : params.environment;
-  if (!appId?.startsWith("app_") || !rpId || !nonce || !createdAt || !expiresAt || !signature) {
+  if (!appId || !rpId || !nonce || !createdAt || !expiresAt || !signature) {
     throw new Error("World human approval broker returned an incomplete signature response.");
+  }
+  if (!appId.startsWith("app_") || !rpId.startsWith("rp_")) {
+    throw new Error("World human approval broker returned invalid app or RP identifiers.");
   }
   return {
     appId: appId as `app_${string}`,
@@ -221,6 +231,127 @@ function verifyWorldCompletionResult(params: {
 function isSuccessfulVerifyBody(value: unknown): boolean {
   const record = asRecord(value);
   return record?.success === true;
+}
+
+function normalizePollStatusType(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizePollError(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeRuntimeError(error: unknown): string {
+  return error instanceof Error && error.message.trim() ? error.message.trim() : String(error);
+}
+
+function timeoutErrorForPollStatus(status: string | null): string {
+  return status ? `timeout_${status}` : "timeout";
+}
+
+async function pollWorldApprovalUntilCompletion(params: {
+  request: { pollOnce: () => Promise<WorldApprovalPollStatus> };
+  timeoutMs: number;
+  pollIntervalMs?: number;
+  signal?: AbortSignal;
+}): Promise<
+  | { success: true; result: unknown; lastStatus: string | null }
+  | { success: false; error: string; lastStatus: string | null }
+> {
+  const pollIntervalMs = Math.max(250, params.pollIntervalMs ?? 1_000);
+  const timeoutMs = Math.max(1_000, params.timeoutMs);
+  const startedAtMs = Date.now();
+  let lastStatus: string | null = null;
+  let lastPollError: string | null = null;
+
+  while (true) {
+    params.signal?.throwIfAborted();
+    if (Date.now() - startedAtMs > timeoutMs) {
+      return {
+        success: false,
+        error: lastPollError ?? timeoutErrorForPollStatus(lastStatus),
+        lastStatus,
+      };
+    }
+
+    let status: WorldApprovalPollStatus;
+    try {
+      // IDKit 4.1.x exposes no signal on pollOnce; race its in-flight bridge
+      // request so run cancellation never strands the verifier lifecycle.
+      status = await awaitWithAbort(params.request.pollOnce(), params.signal);
+      lastPollError = null;
+    } catch (error) {
+      if (params.signal?.aborted) {
+        throw params.signal.reason;
+      }
+      lastPollError = normalizeRuntimeError(error);
+      await waitForPollInterval(pollIntervalMs, params.signal);
+      continue;
+    }
+    lastStatus = normalizePollStatusType(status.type) ?? lastStatus;
+    if (status.type === "confirmed" && status.result) {
+      return {
+        success: true,
+        result: status.result,
+        lastStatus,
+      };
+    }
+    if (status.type === "failed") {
+      return {
+        success: false,
+        error: normalizePollError(status.error) ?? "generic_error",
+        lastStatus,
+      };
+    }
+    await waitForPollInterval(pollIntervalMs, params.signal);
+  }
+}
+
+async function waitForPollInterval(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
+    return;
+  }
+  signal.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function fetchWithRetry(params: {
+  fetchImpl: FetchImpl;
+  input: Parameters<FetchImpl>[0];
+  init: Parameters<FetchImpl>[1];
+  attempts?: number;
+  retryDelayMs?: number;
+  signal?: AbortSignal;
+}): Promise<Response> {
+  const attempts = Math.max(1, params.attempts ?? 3);
+  const retryDelayMs = Math.max(50, params.retryDelayMs ?? 250);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    params.signal?.throwIfAborted();
+    try {
+      return await params.fetchImpl(params.input, params.init);
+    } catch (error) {
+      if (params.signal?.aborted) {
+        throw params.signal.reason;
+      }
+      lastError = error;
+      if (attempt < attempts) {
+        await waitForPollInterval(retryDelayMs, params.signal);
+      }
+    }
+  }
+  throw lastError;
 }
 
 function buildWorldHumanApprovalAction(approvalId: string, actionPrefix: string): string {
@@ -268,10 +399,16 @@ export function resolveAgentkitHumanApprovalRequestConfig(params: {
       "World human approval app ID is not configured. Set `plugins.entries.agentkit.config.hitl.humanApproval.appId`.",
     );
   }
+  if (!humanApproval.appId.startsWith("app_")) {
+    throw new Error("World human approval app ID must start with `app_`.");
+  }
   if (!humanApproval.rpId) {
     throw new Error(
       "World human approval RP ID is not configured. Set `plugins.entries.agentkit.config.hitl.humanApproval.rpId`.",
     );
+  }
+  if (!humanApproval.rpId.startsWith("rp_")) {
+    throw new Error("World human approval RP ID must start with `rp_`.");
   }
   const signingKeyFromEnv = humanApproval.signingKeyEnvVar
     ? (params.env?.[humanApproval.signingKeyEnvVar] ?? null)
@@ -299,6 +436,7 @@ async function requestHostedWorldApprovalSignature(params: {
   brokerUrl: string;
   environment: "production" | "staging";
   fetchImpl: FetchImpl;
+  signal?: AbortSignal;
   ttlSeconds: number;
 }): Promise<AgentkitWorldRpSignature> {
   const response = await params.fetchImpl(params.brokerUrl, {
@@ -313,6 +451,7 @@ async function requestHostedWorldApprovalSignature(params: {
       ttl: params.ttlSeconds,
       environment: params.environment,
     }),
+    signal: params.signal,
   });
   const body = await parseJsonResponse(response);
   if (!response.ok) {
@@ -335,6 +474,7 @@ async function resolveWorldApprovalSignature(params: {
   config: AgentkitHumanApprovalRequestConfig;
   fetchImpl: FetchImpl;
   runtime: WorldIdCoreRuntime;
+  signal?: AbortSignal;
   ttlSeconds: number;
 }): Promise<AgentkitWorldRpSignature> {
   if (params.config.provider === "hosted") {
@@ -344,6 +484,7 @@ async function resolveWorldApprovalSignature(params: {
       brokerUrl: params.config.brokerUrl,
       environment: params.config.environment,
       fetchImpl: params.fetchImpl,
+      signal: params.signal,
       ttlSeconds: params.ttlSeconds,
     });
   }
@@ -373,6 +514,7 @@ export async function runAgentkitWorldHumanApproval(params: {
   renderQrCode?: (input: string) => Promise<void>;
   worldIdRuntime?: WorldIdCoreRuntime;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<AgentkitHumanApprovalSessionResult> {
   const session = await startAgentkitWorldHumanApprovalSession(params);
   await params.onPending?.({
@@ -398,7 +540,9 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
   fetchImpl?: FetchImpl;
   worldIdRuntime?: WorldIdCoreRuntime;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<AgentkitHumanApprovalSession> {
+  params.signal?.throwIfAborted();
   const requestConfig = resolveAgentkitHumanApprovalRequestConfig({
     pluginConfig: params.pluginConfig,
     env: params.env,
@@ -418,8 +562,10 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
     config: requestConfig,
     fetchImpl,
     runtime,
+    signal: params.signal,
     ttlSeconds,
   });
+  params.signal?.throwIfAborted();
 
   const request = await withWorldIdCoreFileFetchCompat(() =>
     runtime.IDKit.request({
@@ -437,14 +583,20 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
       environment: rpSignature.environment,
     }).preset(runtime.orbLegacy()),
   );
+  params.signal?.throwIfAborted();
   return {
     approvalId: params.approval.id,
     action,
     connectorURI: request.connectorURI,
     requestId: request.requestId,
     waitForCompletion: async () => {
-      const completion = await request.pollUntilCompletion({
-        timeout: Math.max(1_000, (params.timeoutMs ?? params.pluginConfig.hitl.timeoutMs) - 1_000),
+      const completion = await pollWorldApprovalUntilCompletion({
+        request,
+        timeoutMs: Math.max(
+          1_000,
+          (params.timeoutMs ?? params.pluginConfig.hitl.timeoutMs) - 1_000,
+        ),
+        signal: params.signal,
       });
       if (!completion.success) {
         return {
@@ -456,6 +608,7 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
           verifyStatus: null,
           verifyBody: null,
           errorCode: completion.error,
+          pollStatus: completion.lastStatus,
           nullifier: null,
         };
       }
@@ -475,6 +628,7 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
           verifyStatus: null,
           verifyBody: null,
           errorCode: proofError,
+          pollStatus: completion.lastStatus,
           nullifier: null,
         };
       }
@@ -489,21 +643,41 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
           verifyStatus: null,
           verifyBody: null,
           errorCode: "missing_nullifier",
+          pollStatus: completion.lastStatus,
           nullifier: null,
         };
       }
 
-      const verifyResponse = await fetchImpl(
-        `https://developer.worldcoin.org/api/v4/verify/${rpSignature.rpId}`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "user-agent": "OpenClaw AgentKit HITL",
+      let verifyResponse: Response;
+      try {
+        verifyResponse = await fetchWithRetry({
+          fetchImpl,
+          input: `https://developer.worldcoin.org/api/v4/verify/${rpSignature.rpId}`,
+          init: {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "user-agent": "OpenClaw AgentKit HITL",
+            },
+            body: JSON.stringify(completion.result),
+            signal: params.signal,
           },
-          body: JSON.stringify(completion.result),
-        },
-      );
+          signal: params.signal,
+        });
+      } catch (error) {
+        return {
+          success: false,
+          action,
+          approvalId: params.approval.id,
+          connectorURI: request.connectorURI,
+          requestId: request.requestId,
+          verifyStatus: null,
+          verifyBody: null,
+          errorCode: normalizeRuntimeError(error),
+          pollStatus: completion.lastStatus,
+          nullifier,
+        };
+      }
       const verifyBody = await parseJsonResponse(verifyResponse);
       const verifySuccess = verifyResponse.ok && isSuccessfulVerifyBody(verifyBody);
       return {
@@ -515,8 +689,15 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
         verifyStatus: verifyResponse.status,
         verifyBody,
         errorCode: null,
+        pollStatus: completion.lastStatus,
         nullifier,
       };
     },
   };
 }
+
+export const __testing = {
+  requestHostedWorldApprovalSignature,
+  pollWorldApprovalUntilCompletion,
+  fetchWithRetry,
+};

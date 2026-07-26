@@ -6,6 +6,7 @@ import {
   type AgentBookVerifier,
   type AgentkitPayload,
 } from "./agentkit.runtime.js";
+import { awaitWithAbort } from "./abort.js";
 import { resolveOptionalTextInputValue } from "./text-input.js";
 
 export type AgentkitVerificationOutcome =
@@ -64,6 +65,7 @@ export async function verifyAgentkitHeader(params: {
   resourceUrl: string;
   agentBook?: AgentBookVerifierLike;
   humanLookupMode?: string;
+  signal?: AbortSignal;
 }): Promise<AgentkitVerificationReport> {
   const resourceUrl = new URL(params.resourceUrl).toString();
   const humanLookupMode = params.humanLookupMode ?? "agentbook";
@@ -95,7 +97,10 @@ export async function verifyAgentkitHeader(params: {
     };
   }
 
-  const messageValidation = await validateAgentkitMessage(payload, resourceUrl);
+  const messageValidation = await awaitWithAbort(
+    validateAgentkitMessage(payload, resourceUrl),
+    params.signal,
+  );
   if (!messageValidation.valid) {
     return {
       resourceUrl,
@@ -120,7 +125,7 @@ export async function verifyAgentkitHeader(params: {
     };
   }
 
-  const signatureValidation = await verifyAgentkitSignature(payload);
+  const signatureValidation = await awaitWithAbort(verifyAgentkitSignature(payload), params.signal);
   if (!signatureValidation.valid || !signatureValidation.address) {
     return {
       resourceUrl,
@@ -147,7 +152,12 @@ export async function verifyAgentkitHeader(params: {
 
   const agentBook = params.agentBook ?? createAgentBookVerifier();
   try {
-    const humanId = await agentBook.lookupHuman(signatureValidation.address);
+    // AgentKit 0.2 exposes no AbortSignal on lookupHuman; stop awaiting the
+    // viem request when the owning external-verification attempt is cancelled.
+    const humanId = await awaitWithAbort(
+      agentBook.lookupHuman(signatureValidation.address),
+      params.signal,
+    );
     if (!humanId) {
       return {
         resourceUrl,
@@ -194,6 +204,7 @@ export async function verifyAgentkitHeader(params: {
       },
     };
   } catch (error) {
+    params.signal?.throwIfAborted();
     return {
       resourceUrl,
       outcome: "agent-book-error",

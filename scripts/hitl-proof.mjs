@@ -499,6 +499,9 @@ async function assertDelegationContract(store) {
       if (verificationCalls === 1) {
         throw new Error("temporary verifier outage");
       }
+      if (verificationCalls === 2) {
+        return { outcome: "agent-book-error" };
+      }
       return { outcome: "verified" };
     },
   });
@@ -557,6 +560,18 @@ async function assertDelegationContract(store) {
     retryableFailureResponse.response,
   );
   assert.equal(retryableFailureResponse.response.statusCode, 503);
+  assert.deepEqual(completions, []);
+
+  const agentBookFailureResponse = createHttpResponse();
+  await runtime.delegationHttpHandler(
+    {
+      method: "GET",
+      url: new URL(resourceUrl).pathname,
+      headers: { [AGENTKIT.toLowerCase()]: "signed-agentkit-header" },
+    },
+    agentBookFailureResponse.response,
+  );
+  assert.equal(agentBookFailureResponse.response.statusCode, 503);
   assert.deepEqual(completions, []);
 
   const proofResponse = createHttpResponse();
@@ -922,6 +937,36 @@ async function assertFailureRetryAndAbort(appConfig) {
   );
 }
 
+async function assertSuccessfulCompletionFailureStaysSuccessful(appConfig) {
+  const store = createMemoryStore();
+  const world = createWorldRuntime();
+  const completions = [];
+  const api = createApi({
+    appConfig,
+    store,
+    completeExternalVerification: async (completion) => {
+      completions.push(completion);
+      throw new Error("temporary host completion outage");
+    },
+  });
+  externalVerificationTesting.setExternalVerificationRuntimeDeps({
+    openGrantStore: () => store,
+    renderQrCodeToString: async () => null,
+    startWorldHumanApprovalSession: world.start,
+  });
+  const attempt = createAttempt({
+    id: "attempt-successful-completion-outage",
+    approvalId: "approval-successful-completion-outage",
+  });
+  const handler = createAgentkitExternalVerificationHandler(api);
+  await handler(attempt.attempt);
+  world.sessions.get(attempt.attempt.id).succeed();
+  await waitFor(() => completions.length === 1, "successful completion outage");
+  assert.deepEqual(completions, [
+    { attemptId: attempt.attempt.id, outcome: "succeeded" },
+  ]);
+}
+
 async function assertPollCancellation() {
   const controller = new AbortController();
   let polls = 0;
@@ -1008,6 +1053,7 @@ async function main() {
     await assertVerifyAndTrust(appConfig, store, world);
     await assertExpiryAndResetTombstones(appConfig);
     await assertFailureRetryAndAbort(appConfig);
+    await assertSuccessfulCompletionFailureStaysSuccessful(appConfig);
     await assertPollCancellation();
     await assertWorldIdentifierValidation();
   } finally {

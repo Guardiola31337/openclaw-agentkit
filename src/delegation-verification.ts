@@ -207,6 +207,15 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
       return true;
     }
 
+    if (report.outcome === "agent-book-error") {
+      entry.completing = false;
+      entry.api.logger.warn(
+        `agentkit: AgentBook lookup temporarily failed for ${entry.attempt.context.approvalId}`,
+      );
+      writeJson(res, 503, { ok: false, error: "AgentBook lookup temporarily failed" });
+      return true;
+    }
+
     if (report.outcome !== "verified") {
       try {
         await entry.api.approvals.completeExternalVerification({

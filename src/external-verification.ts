@@ -15,6 +15,7 @@ import type { AgentkitPendingApproval } from "./hitl-approvals.js";
 import {
   startAgentkitWorldHumanApprovalSession,
   type AgentkitHumanApprovalSession,
+  type AgentkitHumanApprovalSessionResult,
 } from "./human-approval.js";
 import { renderQrCodeToString } from "./qr.runtime.js";
 
@@ -85,32 +86,9 @@ async function monitorWorldVerification(params: {
   grantStore: AgentkitExternalGrantStore;
   session: AgentkitHumanApprovalSession;
 }): Promise<void> {
+  let result: AgentkitHumanApprovalSessionResult;
   try {
-    const result = await params.session.waitForCompletion();
-    if (params.attempt.signal.aborted) {
-      return;
-    }
-    const completion = await params.api.approvals.completeExternalVerification({
-      attemptId: params.attempt.id,
-      outcome: result.success ? "succeeded" : "failed",
-    });
-    if (!result.success) {
-      params.api.logger.warn(
-        `agentkit: World verification failed for ${params.attempt.context.approvalId} (${result.errorCode ?? result.verifyStatus ?? "unknown"})`,
-      );
-      return;
-    }
-    const appConfig = params.api.runtime.config.current() as OpenClawConfig;
-    const pluginConfig = resolveConfiguredAgentkitPluginConfig(appConfig);
-    const grant = upsertAgentkitExternalGrant({
-      attempt: params.attempt,
-      completion,
-      pluginConfig,
-      store: params.grantStore,
-    });
-    if (grant?.status === "active") {
-      params.api.logger.info(`agentkit: stored session grant ${grant.id} for ${grant.toolName}`);
-    }
+    result = await params.session.waitForCompletion();
   } catch (error) {
     if (params.attempt.signal.aborted) {
       return;
@@ -128,6 +106,51 @@ async function monitorWorldVerification(params: {
         `agentkit: could not record failed verification attempt ${params.attempt.id}: ${String(completionError)}`,
       );
     }
+    return;
+  }
+  if (params.attempt.signal.aborted) {
+    return;
+  }
+
+  let completion: Awaited<
+    ReturnType<typeof params.api.approvals.completeExternalVerification>
+  >;
+  try {
+    completion = await params.api.approvals.completeExternalVerification({
+      attemptId: params.attempt.id,
+      outcome: result.success ? "succeeded" : "failed",
+    });
+  } catch (error) {
+    if (!params.attempt.signal.aborted) {
+      params.api.logger.error(
+        `agentkit: could not record ${result.success ? "successful" : "failed"} World verification ${params.attempt.id}: ${String(error)}`,
+      );
+    }
+    return;
+  }
+  if (!result.success) {
+    params.api.logger.warn(
+      `agentkit: World verification failed for ${params.attempt.context.approvalId} (${result.errorCode ?? result.verifyStatus ?? "unknown"})`,
+    );
+    return;
+  }
+
+  try {
+    const appConfig = params.api.runtime.config.current() as OpenClawConfig;
+    const pluginConfig = resolveConfiguredAgentkitPluginConfig(appConfig);
+    const grant = upsertAgentkitExternalGrant({
+      attempt: params.attempt,
+      completion,
+      pluginConfig,
+      store: params.grantStore,
+    });
+    if (grant?.status === "active") {
+      params.api.logger.info(`agentkit: stored session grant ${grant.id} for ${grant.toolName}`);
+    }
+  } catch (error) {
+    params.api.logger.error(
+      `agentkit: grant storage failed for ${params.attempt.context.approvalId}: ${String(error)}`,
+    );
   }
 }
 

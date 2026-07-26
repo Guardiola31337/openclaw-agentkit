@@ -442,6 +442,7 @@ async function assertDelegationContract(store) {
   const appConfig = createConfig("delegation");
   const completions = [];
   let delegationAttempt;
+  let verificationCalls = 0;
   const api = createApi({
     appConfig,
     store,
@@ -451,7 +452,13 @@ async function assertDelegationContract(store) {
     },
   });
   delegationVerificationTesting.setDelegationVerificationRuntimeDeps({
-    verifyHeader: async () => ({ outcome: "verified" }),
+    verifyHeader: async () => {
+      verificationCalls += 1;
+      if (verificationCalls === 1) {
+        throw new Error("temporary verifier outage");
+      }
+      return { outcome: "verified" };
+    },
   });
   const hook = createAgentkitBeforeToolCallHook(api);
   const hookResult = await hook(
@@ -497,6 +504,18 @@ async function assertDelegationContract(store) {
   );
   assert.equal(challengeResponse.response.statusCode, 401);
   assert.equal(challengeResponse.read().body.resourceUrl, resourceUrl);
+
+  const retryableFailureResponse = createHttpResponse();
+  await runtime.delegationHttpHandler(
+    {
+      method: "GET",
+      url: new URL(resourceUrl).pathname,
+      headers: { [AGENTKIT.toLowerCase()]: "signed-agentkit-header" },
+    },
+    retryableFailureResponse.response,
+  );
+  assert.equal(retryableFailureResponse.response.statusCode, 503);
+  assert.deepEqual(completions, []);
 
   const proofResponse = createHttpResponse();
   await runtime.delegationHttpHandler(
@@ -550,6 +569,28 @@ async function assertDelegationContract(store) {
   await handling;
   assert.equal(abortResponse.response.statusCode, 410);
   assert.deepEqual(completions, [{ attemptId: "attempt-delegation", outcome: "succeeded" }]);
+
+  const tlsConfig = createConfig("delegation");
+  tlsConfig.gateway = { tls: { enabled: true } };
+  const tlsRuntime = createAgentkitExternalVerificationRuntime(
+    createApi({
+      appConfig: tlsConfig,
+      store,
+      completeExternalVerification: async () => {
+        throw new Error("unexpected TLS completion");
+      },
+    }),
+  );
+  const tlsAttempt = createAttempt({
+    id: "attempt-delegation-tls",
+    approvalId: "approval-delegation-tls",
+    decision: "allow-once",
+    label: "Verify AgentKit delegation",
+  });
+  await assert.rejects(
+    tlsRuntime.handler(tlsAttempt.attempt),
+    /requires Gateway TLS to be disabled/,
+  );
 }
 
 async function assertVerifyOnce(appConfig, store, world) {

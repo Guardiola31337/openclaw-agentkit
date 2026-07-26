@@ -111,10 +111,10 @@ openclaw agentkit status
 For delegation approvals, run the canonical `/approve ... external ...`
 command OpenClaw shows for **Verify once** or **Verify and trust for session**.
 AgentKit then presents a one-use loopback resource command. Run that command
-with the private key for a registered AgentKit signer. When Gateway TLS is
-enabled, the generated command uses HTTPS and pins the exact Gateway leaf
-certificate through `--gateway-certificate-file`; keep that argument intact.
-`openclaw agentkit approve` cannot submit an allow decision directly.
+with the private key for a registered AgentKit signer. Delegation verification
+currently requires Gateway TLS to be disabled; TLS support can follow as a
+separate transport change. `openclaw agentkit approve` cannot submit an allow
+decision directly.
 
 `openclaw agentkit approvals` and the deny-only `openclaw agentkit approve`
 command use OpenClaw's configured Gateway URL and credentials by default. If
@@ -176,8 +176,8 @@ the plugin's isolated HITL proof, then starts a real local OpenClaw Gateway with
 the plugin installed from this checkout. The Gateway proof covers denial,
 verify-once, exact-session trust, TTL expiry, tool/session isolation, failed
 verification and fresh retry, concurrent approvals, late proof after denial,
-run cancellation, graceful shutdown, and the signed delegation ceremony over a
-self-signed TLS Gateway. If the OpenClaw checkout is already built, add
+run cancellation, graceful shutdown, and the signed loopback delegation
+ceremony. If the OpenClaw checkout is already built, add
 `--skip-host-build`.
 
 Keep physical World App proof and its isolated production runbook on the

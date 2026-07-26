@@ -60,7 +60,7 @@ sends the canonical command, AgentKit presents a one-use loopback resource
 command:
 
 ```sh
-openclaw agentkit request --resource https://127.0.0.1:<port>/plugins/agentkit/external-verification/<token> --gateway-certificate-file <gateway-cert.pem> --private-key-file <path>
+openclaw agentkit request --resource http://127.0.0.1:<port>/plugins/agentkit/external-verification/<token> --private-key-file <path>
 ```
 
 The plugin route creates the signed-resource challenge, verifies the returned
@@ -68,10 +68,9 @@ AgentKit header and AgentBook human lookup inside the running plugin instance,
 then calls `completeExternalVerification(...)`. The ordinary approval RPC
 remains deny-only. The route token is bound to one active attempt, disappears
 on completion or abort, and never sends proof material into OpenClaw core.
-When Gateway TLS is disabled, the generated resource uses loopback HTTP and
-omits `--gateway-certificate-file`. With TLS enabled, that option is restricted
-to the loopback resource and pins the exact configured Gateway leaf
-certificate. A challenge cannot redirect the signed header to another URL.
+Delegation verification currently requires Gateway TLS to be disabled; the
+plugin fails closed during attempt setup when TLS is enabled. TLS support can
+follow as a separate transport change.
 
 `openclaw agentkit approve` remains available for denial and compatibility
 guidance, but it cannot submit an allow decision.
@@ -113,8 +112,8 @@ pnpm test:openclaw-hitl
 World fixtures. `test:openclaw-hitl` builds an isolated state directory,
 installs this checkout as an external plugin, starts a real built OpenClaw
 Gateway, and drives the real approval broker plus `before_tool_call` hook. Only
-World transport is mocked. The delegation lane starts a self-signed TLS Gateway
-and proves the unsigned challenge, signed retry, and plugin-bound completion.
+World transport is mocked. The delegation lane proves the unsigned challenge,
+signed retry, and plugin-bound completion over loopback HTTP.
 
 Run the complete local flow in one command:
 

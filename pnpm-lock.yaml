@@ -12,8 +12,8 @@ importers:
         specifier: ^0.2.0
         version: 0.2.0(ethers@6.16.0)(typescript@5.9.3)
       '@worldcoin/idkit-core':
-        specifier: ^4.1.4
-        version: 4.1.6
+        specifier: ^4.2.2
+        version: 4.2.2
       viem:
         specifier: ^2.48.8
         version: 2.49.2(typescript@5.9.3)(zod@4.4.3)
@@ -77,6 +77,7 @@ packages:
   '@aws-sdk/core@3.974.10':
     resolution: {integrity: sha512-ZGFFlYynBR78Y/F8b/7y4i4sgW/iGwJSjoM7AZo5Et6vyr4/L0bunN+uzKMsvecCZyqcPp4RRK7Rs17l0kMujg==}
     engines: {node: '>=20.0.0'}
+    deprecated: Deprecated due to an error deserialization bug in JSON 1.0 protocol services, see https://github.com/aws/aws-sdk-js-v3/pull/8031. Newer version available.
 
   '@aws-sdk/credential-provider-env@3.972.36':
     resolution: {integrity: sha512-gE+CGuPZD1eqUWGSrM8CXDjlwuPujIuwI+IlorD1wE2RcANKKT4jscB9GY1nTJbjmXzD18sycsYbgCG5m3n4/g==}
@@ -618,8 +619,8 @@ packages:
   '@worldcoin/agentkit@0.2.0':
     resolution: {integrity: sha512-fPH2VPu91j0ZEUMlSdO+WGQ6c+YKZpFeqwdpuTO3B4cWVyhyj6oIZVI3ppXV/q8TtiYMTIJyk0VM/iltUP6HIA==}
 
-  '@worldcoin/idkit-core@4.1.6':
-    resolution: {integrity: sha512-CRCXZaBAjsRe+w92+jtKUnequ54K0Qh+PrjLHmRTfeGe7svBnP/QOBx3kiPJaysj5IgnjS8oMj6imYMH7k8kUQ==}
+  '@worldcoin/idkit-core@4.2.2':
+    resolution: {integrity: sha512-CUqxy6TprCo3RhTpnfaEQbjqhNf2lc9C0Z9FH1KNbodo6MoIqpDvUSytlSP5toDRhlieETiClwlV34masRgovw==}
 
   '@worldcoin/idkit-server@1.1.1':
     resolution: {integrity: sha512-iO4Kd3QBLzJak3BPz5eIzRjW0kT8Px5c3LbNzvCKMnczLvVSKoWqdvGiJlkK8Dp29KstNI62iv4ak0z8nzui/Q==}
@@ -2790,7 +2791,7 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@worldcoin/idkit-core@4.1.6':
+  '@worldcoin/idkit-core@4.2.2':
     dependencies:
       '@noble/hashes': 1.8.0
       '@worldcoin/idkit-server': 1.1.1

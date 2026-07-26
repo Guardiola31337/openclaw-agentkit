@@ -166,7 +166,6 @@ async function runAgentkitVerifierRequestCommand(opts: {
 }
 
 async function runAgentkitProtectedRequestCommand(opts: {
-  gatewayCertificateFile?: string;
   resource: string;
   privateKey?: string;
   privateKeyFile?: string;
@@ -179,7 +178,6 @@ async function runAgentkitProtectedRequestCommand(opts: {
   const result = await requestAgentkitProtectedResource({
     resourceUrl: opts.resource,
     signerKeyHex: privateKey,
-    gatewayCertificateFile: opts.gatewayCertificateFile,
   });
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -430,13 +428,11 @@ export function registerAgentkitCli(program: Command, appConfig: OpenClawConfig)
       "Request an AgentKit-protected resource by fetching a challenge and attaching a signed header",
     )
     .requiredOption("--resource <url>", "Protected resource URL")
-    .option("--gateway-certificate-file <path>", "Leaf certificate for a TLS Gateway resource")
     .option("--private-key <hex>", "Use a specific EVM private key instead of generating one")
     .option("--private-key-file <path>", "Read the private key from a file or `-` for stdin")
     .option("--json", "Print JSON")
     .action(
       async (opts: {
-        gatewayCertificateFile?: string;
         resource: string;
         privateKey?: string;
         privateKeyFile?: string;

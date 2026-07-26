@@ -1,13 +1,11 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import path from "node:path";
 import {
   resolveGatewayPort,
   type OpenClawConfig,
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/core";
 import type { PluginExternalVerificationAttempt } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import { AGENTKIT } from "./agentkit.runtime.js";
 import type { AgentkitPluginConfig } from "./config.js";
 import {
@@ -69,12 +67,8 @@ function readAttemptToken(req: IncomingMessage): string | null {
 
 function formatDelegationChallenge(params: {
   attempt: PluginExternalVerificationAttempt;
-  gatewayCertificateFile?: string;
   resourceUrl: string;
 }): string {
-  const gatewayCertificateArgument = params.gatewayCertificateFile
-    ? ` --gateway-certificate-file ${formatShellArgument(params.gatewayCertificateFile)}`
-    : "";
   return [
     "Verify AgentKit delegation",
     `Approval: ${params.attempt.context.approvalId}`,
@@ -85,33 +79,8 @@ function formatDelegationChallenge(params: {
     }.`,
     "",
     "Run this on the OpenClaw host with a registered AgentKit signer:",
-    `\`openclaw agentkit request --resource ${params.resourceUrl}${gatewayCertificateArgument} --private-key-file <path>\``,
+    `\`openclaw agentkit request --resource ${params.resourceUrl} --private-key-file <path>\``,
   ].join("\n");
-}
-
-function formatShellArgument(value: string): string {
-  return /^[A-Za-z0-9_./:@+-]+$/u.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-function resolveGatewayTlsCertificateFile(params: {
-  api: OpenClawPluginApi;
-  appConfig: OpenClawConfig;
-}): string | undefined {
-  const tls = params.appConfig.gateway?.tls;
-  if (tls?.enabled !== true) {
-    return undefined;
-  }
-  const configuredPath = tls.certPath;
-  if (configuredPath) {
-    return resolveUserPath(configuredPath);
-  }
-  const stateDir = params.api.runtime.state.resolveStateDir(process.env);
-  const configPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
-  const configDir =
-    process.env.OPENCLAW_STATE_DIR?.trim() || !configPath
-      ? stateDir
-      : path.dirname(resolveUserPath(configPath));
-  return path.join(configDir, "gateway", "tls", "gateway-cert.pem");
 }
 
 export function createAgentkitDelegationVerificationRuntime(params: { api: OpenClawPluginApi }) {
@@ -132,14 +101,13 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
     startParams.attempt.signal.throwIfAborted();
     const token = randomBytes(24).toString("base64url");
     const appConfig = params.api.runtime.config.current() as OpenClawConfig;
+    if (appConfig.gateway?.tls?.enabled === true) {
+      throw new Error("AgentKit delegation verification requires Gateway TLS to be disabled");
+    }
     const port = resolveGatewayPort(appConfig, process.env);
-    const gatewayCertificateFile = resolveGatewayTlsCertificateFile({
-      api: params.api,
-      appConfig,
-    });
     const resourceUrl = new URL(
       `${AGENTKIT_DELEGATION_VERIFICATION_ROUTE}${token}`,
-      `${gatewayCertificateFile ? "https" : "http"}://127.0.0.1:${port}`,
+      `http://127.0.0.1:${port}`,
     ).toString();
     let entry: ActiveDelegationAttempt;
     const onAbort = () => finish(entry);
@@ -159,7 +127,6 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
       await startParams.attempt.present({
         message: formatDelegationChallenge({
           attempt: startParams.attempt,
-          gatewayCertificateFile,
           resourceUrl,
         }),
       });
@@ -214,62 +181,105 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
     }
     entry.completing = true;
 
+    let report: Awaited<ReturnType<typeof deps.verifyHeader>>;
     try {
-      const report = await deps.verifyHeader({
+      report = await deps.verifyHeader({
         header,
         resourceUrl: entry.resourceUrl,
         signal: entry.attempt.signal,
       });
+    } catch (error) {
       if (entry.attempt.signal.aborted) {
         finish(entry);
         writeJson(res, 410, { ok: false, error: "verification attempt cancelled" });
         return true;
       }
-      if (report.outcome !== "verified") {
+      entry.completing = false;
+      entry.api.logger.error(
+        `agentkit: delegation verification failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
+      );
+      writeJson(res, 503, { ok: false, error: "delegation verification temporarily failed" });
+      return true;
+    }
+    if (entry.attempt.signal.aborted) {
+      finish(entry);
+      writeJson(res, 410, { ok: false, error: "verification attempt cancelled" });
+      return true;
+    }
+
+    if (report.outcome !== "verified") {
+      try {
         await entry.api.approvals.completeExternalVerification({
           attemptId: entry.attempt.id,
           outcome: "failed",
         });
-        finish(entry);
-        writeJson(res, 403, {
-          ok: false,
-          error: "AgentKit delegation verification failed",
-          outcome: report.outcome,
-        });
+      } catch (error) {
+        if (entry.attempt.signal.aborted) {
+          finish(entry);
+          writeJson(res, 410, { ok: false, error: "verification attempt cancelled" });
+          return true;
+        }
+        entry.completing = false;
+        entry.api.logger.error(
+          `agentkit: delegation completion failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
+        );
+        writeJson(res, 503, { ok: false, error: "verification completion temporarily failed" });
         return true;
       }
+      finish(entry);
+      writeJson(res, 403, {
+        ok: false,
+        error: "AgentKit delegation verification failed",
+        outcome: report.outcome,
+      });
+      return true;
+    }
 
-      const completion = await entry.api.approvals.completeExternalVerification({
+    let completion: Awaited<
+      ReturnType<typeof entry.api.approvals.completeExternalVerification>
+    >;
+    try {
+      completion = await entry.api.approvals.completeExternalVerification({
         attemptId: entry.attempt.id,
         outcome: "succeeded",
       });
+    } catch (error) {
+      if (entry.attempt.signal.aborted) {
+        finish(entry);
+        writeJson(res, 410, { ok: false, error: "verification attempt cancelled" });
+        return true;
+      }
+      entry.completing = false;
+      entry.api.logger.error(
+        `agentkit: delegation completion failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
+      );
+      writeJson(res, 503, { ok: false, error: "verification completion temporarily failed" });
+      return true;
+    }
+
+    finish(entry);
+    let grantStored = false;
+    try {
       const grant = upsertAgentkitExternalGrant({
         attempt: entry.attempt,
         completion,
         pluginConfig: entry.pluginConfig,
         store: entry.grantStore,
       });
-      finish(entry);
-      writeJson(res, completion.applied ? 200 : 409, {
-        ok: completion.applied,
-        approvalId: entry.attempt.context.approvalId,
-        attemptId: entry.attempt.id,
-        decision: entry.attempt.context.decision,
-        grantStored: grant?.status === "active",
-      });
-      return true;
+      grantStored = grant?.status === "active";
     } catch (error) {
-      finish(entry);
-      if (entry.attempt.signal.aborted) {
-        writeJson(res, 410, { ok: false, error: "verification attempt cancelled" });
-        return true;
-      }
       entry.api.logger.error(
-        `agentkit: delegation verification failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
+        `agentkit: delegation grant storage failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
       );
-      writeJson(res, 409, { ok: false, error: "verification completion failed" });
-      return true;
     }
+    writeJson(res, completion.applied ? 200 : 409, {
+      ok: completion.applied,
+      approvalId: entry.attempt.context.approvalId,
+      attemptId: entry.attempt.id,
+      decision: entry.attempt.context.decision,
+      grantStored,
+    });
+    return true;
   };
 
   return { handler, start };

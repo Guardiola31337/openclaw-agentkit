@@ -1,6 +1,3 @@
-import { X509Certificate } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { request as httpsRequest } from "node:https";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AGENTKIT } from "./agentkit.runtime.js";
 import type { AgentkitProtectedResourceChallenge } from "./protected-challenge.js";
@@ -141,98 +138,6 @@ function withAgentkitHeader(
   };
 }
 
-function responseHeadersFromRaw(rawHeaders: string[]): Headers {
-  const headers = new Headers();
-  for (let index = 0; index < rawHeaders.length; index += 2) {
-    const name = rawHeaders[index];
-    const value = rawHeaders[index + 1];
-    if (name && value !== undefined) {
-      headers.append(name, value);
-    }
-  }
-  return headers;
-}
-
-function normalizeCertificateFingerprint(value: string): string {
-  return value.replaceAll(":", "").trim().toLowerCase();
-}
-
-async function createGatewayTlsFetch(params: {
-  certificateFile: string;
-  resourceUrl: string;
-}): Promise<FetchImpl> {
-  const certificate = await readFile(params.certificateFile, "utf8");
-  const expectedFingerprint = normalizeCertificateFingerprint(
-    new X509Certificate(certificate).fingerprint256,
-  );
-  const expectedResourceUrl = new URL(params.resourceUrl);
-  if (
-    expectedResourceUrl.protocol !== "https:" ||
-    expectedResourceUrl.hostname !== "127.0.0.1" ||
-    expectedResourceUrl.username ||
-    expectedResourceUrl.password
-  ) {
-    throw new Error(
-      "AgentKit Gateway certificate pinning is available only for an HTTPS loopback resource.",
-    );
-  }
-
-  return (async (input, init) => {
-    const requestUrl = new URL(
-      typeof input === "string" || input instanceof URL ? input : input.url,
-    );
-    if (requestUrl.toString() !== expectedResourceUrl.toString()) {
-      throw new Error("AgentKit Gateway challenge changed the pinned resource URL.");
-    }
-    if (init?.body) {
-      throw new Error("AgentKit Gateway TLS requests do not support request bodies.");
-    }
-    const requestHeaders = new Headers(
-      init?.headers ?? (input instanceof Request ? input.headers : undefined),
-    );
-    return await new Promise<Response>((resolve, reject) => {
-      const request = httpsRequest(
-        requestUrl,
-        {
-          ca: certificate,
-          // The resource is intentionally loopback. Pinning the exact Gateway
-          // leaf certificate preserves server identity without relying on its DNS SAN.
-          checkServerIdentity: (_hostname, peerCertificate) => {
-            const actualFingerprint = normalizeCertificateFingerprint(
-              peerCertificate.fingerprint256 ?? "",
-            );
-            return actualFingerprint === expectedFingerprint
-              ? undefined
-              : new Error("AgentKit Gateway certificate fingerprint mismatch.");
-          },
-          headers: Object.fromEntries(requestHeaders.entries()),
-          method: init?.method ?? (input instanceof Request ? input.method : "GET"),
-          ...(init?.signal ? { signal: init.signal } : {}),
-        },
-        (response) => {
-          const chunks: Buffer[] = [];
-          response.on("data", (chunk: Buffer | string) => {
-            chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-          });
-          response.once("error", reject);
-          response.once("end", () => {
-            const body = Buffer.concat(chunks);
-            resolve(
-              new Response(body.length > 0 ? body : null, {
-                headers: responseHeadersFromRaw(response.rawHeaders),
-                status: response.statusCode ?? 500,
-                statusText: response.statusMessage,
-              }),
-            );
-          });
-        },
-      );
-      request.once("error", reject);
-      request.end();
-    });
-  }) as FetchImpl;
-}
-
 export async function resolveAgentkitPrivateKeyValue(params: {
   privateKey?: string;
   privateKeyFile?: string;
@@ -257,18 +162,10 @@ export async function requestAgentkitProtectedResource(params: {
   resourceUrl: string;
   signerKeyHex?: Hex;
   fetchImpl?: FetchImpl;
-  gatewayCertificateFile?: string;
   requestInitFactory?: () => RequestInit;
 }): Promise<AgentkitProtectedRequestResult> {
   const resourceUrl = new URL(params.resourceUrl).toString();
-  const fetchImpl =
-    params.fetchImpl ??
-    (params.gatewayCertificateFile
-      ? await createGatewayTlsFetch({
-          certificateFile: params.gatewayCertificateFile,
-          resourceUrl,
-        })
-      : fetch);
+  const fetchImpl = params.fetchImpl ?? fetch;
   const requestInitFactory = params.requestInitFactory ?? (() => ({}));
 
   const prepared = await prepareAgentkitProtectedRequest({

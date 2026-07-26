@@ -36,4 +36,5 @@ jobs:
       - run: pnpm dev:link-openclaw .openclaw-source
       - run: pnpm test:hitl
       - run: pnpm test:openclaw-hitl
+      - run: AGENTKIT_E2E_MODE=delegation pnpm test:openclaw-hitl
       - run: pnpm pack:check

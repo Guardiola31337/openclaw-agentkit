@@ -371,16 +371,11 @@ async function main() {
             /--resource (http:\/\/127\.0\.0\.1:\d+\/plugins\/agentkit\/external-verification\/[A-Za-z0-9_-]+)/u,
           )?.[1];
           assert.ok(resourceUrl, "delegation presentation must include a one-use resource URL");
-          const gatewayCertificateFile = delegationPresentation?.match(
-            /--gateway-certificate-file ([^\s`]+)/u,
-          )?.[1];
-          assert.equal(gatewayCertificateFile, undefined);
           const protectedRequestModule = await import(
             pathToFileURL(path.join(repoRoot, "dist", "src", "protected-request.js")).href
           );
           const protectedResult = await protectedRequestModule.requestAgentkitProtectedResource({
             resourceUrl,
-            gatewayCertificateFile,
           });
           assert.equal(protectedResult.challengeStatus, 401);
           assert.equal(protectedResult.finalStatus, 200);

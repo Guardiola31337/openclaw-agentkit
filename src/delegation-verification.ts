@@ -10,7 +10,7 @@ import { AGENTKIT } from "./agentkit.runtime.js";
 import type { AgentkitPluginConfig } from "./config.js";
 import {
   type AgentkitExternalGrantStore,
-  upsertAgentkitExternalGrant,
+  persistAgentkitExternalGrant,
 } from "./external-verification-grants.js";
 import { createAgentkitProtectedResourceChallenge } from "./protected-challenge.js";
 import { verifyAgentkitHeader } from "./verify.js";
@@ -266,10 +266,9 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
       return true;
     }
 
-    finish(entry);
     let grantStored = false;
     try {
-      const grant = upsertAgentkitExternalGrant({
+      const grant = await persistAgentkitExternalGrant({
         attempt: entry.attempt,
         completion,
         pluginConfig: entry.pluginConfig,
@@ -281,8 +280,12 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
         `agentkit: delegation grant storage failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
       );
     }
-    writeJson(res, completion.applied ? 200 : 409, {
-      ok: completion.applied,
+    finish(entry);
+    const completed = completion.applied || completion.attempt.outcome === "succeeded";
+    const trusted = entry.attempt.context.decision !== "allow-always" || grantStored;
+    const ok = completed && trusted;
+    writeJson(res, ok ? 200 : 500, {
+      ok,
       approvalId: entry.attempt.context.approvalId,
       attemptId: entry.attempt.id,
       decision: entry.attempt.context.decision,

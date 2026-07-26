@@ -150,6 +150,35 @@ export function upsertAgentkitExternalGrant(params: {
   return params.store.lookup(record.id) ?? null;
 }
 
+const GRANT_STORAGE_RETRY_INITIAL_MS = 100;
+const GRANT_STORAGE_RETRY_MAX_MS = 5_000;
+
+export async function persistAgentkitExternalGrant(params: {
+  attempt: PluginExternalVerificationAttempt;
+  completion: PluginExternalVerificationCompletionResult;
+  pluginConfig: AgentkitPluginConfig;
+  store: AgentkitExternalGrantStore;
+}): Promise<AgentkitExternalGrantRecord | null> {
+  const authorization = params.completion.grantAuthorization;
+  if (!authorization) {
+    return upsertAgentkitExternalGrant(params);
+  }
+  const expiresAtMs = authorization.issuedAtMs + params.pluginConfig.hitl.grantTtlMs;
+  let retryDelayMs = GRANT_STORAGE_RETRY_INITIAL_MS;
+  for (;;) {
+    try {
+      return upsertAgentkitExternalGrant(params);
+    } catch (error) {
+      const remainingMs = expiresAtMs - Date.now();
+      if (remainingMs <= 0) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(retryDelayMs, remainingMs)));
+      retryDelayMs = Math.min(retryDelayMs * 2, GRANT_STORAGE_RETRY_MAX_MS);
+    }
+  }
+}
+
 export function tombstoneAgentkitExternalGrant(params: {
   grantId: string;
   status: Exclude<AgentkitExternalGrantStatus, "active" | "expired">;

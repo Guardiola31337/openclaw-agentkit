@@ -490,7 +490,19 @@ async function assertDelegationContract(store) {
     store,
     completeExternalVerification: async (completion) => {
       completions.push(completion);
-      return completionFor(delegationAttempt.attempt, delegationAttempt.attempt.context.decision);
+      const attempt = delegationAttempt.attempt;
+      const decision = attempt.context.decision;
+      const authorization =
+        decision === "allow-always"
+          ? {
+              id: `grant-${attempt.id}`,
+              issuedAtMs: NOW_MS,
+              approvalId: attempt.context.approvalId,
+              attemptId: attempt.id,
+              decision,
+            }
+          : undefined;
+      return completionFor(attempt, decision, authorization);
     },
   });
   delegationVerificationTesting.setDelegationVerificationRuntimeDeps({
@@ -588,6 +600,60 @@ async function assertDelegationContract(store) {
   assert.equal(proofResponse.read().body.ok, true);
   assert.equal("report" in proofResponse.read().body, false);
 
+  const trustStore = createMemoryStore();
+  let grantStorageAttempts = 0;
+  const flakyTrustStore = {
+    ...trustStore,
+    registerIfAbsent(key, value) {
+      grantStorageAttempts += 1;
+      if (grantStorageAttempts === 1) {
+        throw new Error("temporary grant store outage");
+      }
+      return trustStore.registerIfAbsent(key, value);
+    },
+  };
+  let trustAttempt;
+  const trustApi = createApi({
+    appConfig,
+    store: flakyTrustStore,
+    completeExternalVerification: async (completion) =>
+      completionFor(trustAttempt.attempt, "allow-always", {
+        id: "grant-delegation-trust",
+        issuedAtMs: NOW_MS,
+        approvalId: trustAttempt.attempt.context.approvalId,
+        attemptId: trustAttempt.attempt.id,
+        decision: "allow-always",
+      }),
+  });
+  delegationVerificationTesting.setDelegationVerificationRuntimeDeps({
+    verifyHeader: async () => ({ outcome: "verified" }),
+  });
+  const trustRuntime = createAgentkitExternalVerificationRuntime(trustApi);
+  trustAttempt = createAttempt({
+    id: "attempt-delegation-trust",
+    approvalId: "approval-delegation-trust",
+    decision: "allow-always",
+    label: "Verify AgentKit delegation",
+  });
+  await trustRuntime.handler(trustAttempt.attempt);
+  const trustResourceUrl = trustAttempt.presentations[0].match(
+    /--resource (http:\/\/127\.0\.0\.1:\d+\/plugins\/agentkit\/external-verification\/[A-Za-z0-9_-]+)/u,
+  )?.[1];
+  assert.ok(trustResourceUrl);
+  const trustResponse = createHttpResponse();
+  await trustRuntime.delegationHttpHandler(
+    {
+      method: "GET",
+      url: new URL(trustResourceUrl).pathname,
+      headers: { [AGENTKIT.toLowerCase()]: "signed-agentkit-header" },
+    },
+    trustResponse.response,
+  );
+  assert.equal(trustResponse.response.statusCode, 200);
+  assert.equal(trustResponse.read().body.grantStored, true);
+  assert.equal(grantStorageAttempts, 2);
+  assert.equal(trustStore.lookup("grant-delegation-trust").status, "active");
+
   let observedSignal = null;
   delegationVerificationTesting.setDelegationVerificationRuntimeDeps({
     verifyHeader: async ({ signal }) => {
@@ -683,6 +749,17 @@ async function assertVerifyOnce(appConfig, store, world) {
 
 async function assertVerifyAndTrust(appConfig, store, world) {
   const completions = [];
+  let grantStorageAttempts = 0;
+  const flakyStore = {
+    ...store,
+    registerIfAbsent(key, value) {
+      grantStorageAttempts += 1;
+      if (grantStorageAttempts === 1) {
+        throw new Error("temporary grant store outage");
+      }
+      return store.registerIfAbsent(key, value);
+    },
+  };
   const attempt = createAttempt({
     id: "attempt-always",
     approvalId: "approval-always",
@@ -704,7 +781,7 @@ async function assertVerifyAndTrust(appConfig, store, world) {
     },
   });
   externalVerificationTesting.setExternalVerificationRuntimeDeps({
-    openGrantStore: () => store,
+    openGrantStore: () => flakyStore,
     renderQrCodeToString: async () => null,
     startWorldHumanApprovalSession: world.start,
   });
@@ -712,6 +789,7 @@ async function assertVerifyAndTrust(appConfig, store, world) {
   await handler(attempt.attempt);
   world.sessions.get("attempt-always").succeed();
   await waitFor(() => store.entries().length === 1, "session grant");
+  assert.equal(grantStorageAttempts, 2);
   assert.deepEqual(completions, [{ attemptId: "attempt-always", outcome: "succeeded" }]);
 
   const grant = store.lookup(authorization.id);
@@ -946,7 +1024,10 @@ async function assertSuccessfulCompletionFailureStaysSuccessful(appConfig) {
     store,
     completeExternalVerification: async (completion) => {
       completions.push(completion);
-      throw new Error("temporary host completion outage");
+      if (completions.length === 1) {
+        throw new Error("temporary host completion outage");
+      }
+      return completionFor(attempt.attempt, "allow-once");
     },
   });
   externalVerificationTesting.setExternalVerificationRuntimeDeps({
@@ -961,8 +1042,9 @@ async function assertSuccessfulCompletionFailureStaysSuccessful(appConfig) {
   const handler = createAgentkitExternalVerificationHandler(api);
   await handler(attempt.attempt);
   world.sessions.get(attempt.attempt.id).succeed();
-  await waitFor(() => completions.length === 1, "successful completion outage");
+  await waitFor(() => completions.length === 2, "successful completion retry");
   assert.deepEqual(completions, [
+    { attemptId: attempt.attempt.id, outcome: "succeeded" },
     { attemptId: attempt.attempt.id, outcome: "succeeded" },
   ]);
 }

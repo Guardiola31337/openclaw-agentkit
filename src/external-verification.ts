@@ -8,7 +8,7 @@ import { createAgentkitDelegationVerificationRuntime } from "./delegation-verifi
 import {
   createAgentkitExternalGrantStoreAccessor,
   openAgentkitExternalGrantStore,
-  upsertAgentkitExternalGrant,
+  persistAgentkitExternalGrant,
   type AgentkitExternalGrantStore,
 } from "./external-verification-grants.js";
 import type { AgentkitPendingApproval } from "./hitl-approvals.js";
@@ -32,6 +32,73 @@ const defaultExternalVerificationRuntimeDeps: ExternalVerificationRuntimeDeps = 
 };
 
 let externalVerificationRuntimeDeps = defaultExternalVerificationRuntimeDeps;
+
+const COMPLETION_RETRY_INITIAL_MS = 100;
+const COMPLETION_RETRY_MAX_MS = 2_000;
+
+async function waitForRetry(params: {
+  delayMs: number;
+  expiresAtMs: number;
+  signal: AbortSignal;
+}): Promise<boolean> {
+  if (params.signal.aborted) {
+    return false;
+  }
+  const delayMs = Math.min(params.delayMs, params.expiresAtMs - Date.now());
+  if (delayMs <= 0) {
+    return false;
+  }
+  return await new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (retry: boolean) => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      params.signal.removeEventListener("abort", onAbort);
+      resolve(retry);
+    };
+    const onAbort = () => finish(false);
+    timer = setTimeout(() => finish(true), delayMs);
+    params.signal.addEventListener("abort", onAbort, { once: true });
+    if (params.signal.aborted) {
+      onAbort();
+    }
+  });
+}
+
+async function completeExternalVerificationWithRetry(params: {
+  api: OpenClawPluginApi;
+  attempt: PluginExternalVerificationAttempt;
+  outcome: "succeeded" | "failed";
+}): Promise<
+  Awaited<ReturnType<OpenClawPluginApi["approvals"]["completeExternalVerification"]>> | null
+> {
+  let retryDelayMs = COMPLETION_RETRY_INITIAL_MS;
+  for (;;) {
+    try {
+      return await params.api.approvals.completeExternalVerification({
+        attemptId: params.attempt.id,
+        outcome: params.outcome,
+      });
+    } catch (error) {
+      if (params.attempt.signal.aborted) {
+        return null;
+      }
+      params.api.logger.warn(
+        `agentkit: could not record ${params.outcome} verification attempt ${params.attempt.id}: ${String(error)}`,
+      );
+      const retry = await waitForRetry({
+        delayMs: retryDelayMs,
+        expiresAtMs: params.attempt.context.expiresAtMs,
+        signal: params.attempt.signal,
+      });
+      if (!retry) {
+        return null;
+      }
+      retryDelayMs = Math.min(retryDelayMs * 2, COMPLETION_RETRY_MAX_MS);
+    }
+  }
+}
 
 function toPendingApproval(attempt: PluginExternalVerificationAttempt): AgentkitPendingApproval {
   return {
@@ -96,36 +163,23 @@ async function monitorWorldVerification(params: {
     params.api.logger.error(
       `agentkit: external verification failed for ${params.attempt.context.approvalId}: ${String(error)}`,
     );
-    try {
-      await params.api.approvals.completeExternalVerification({
-        attemptId: params.attempt.id,
-        outcome: "failed",
-      });
-    } catch (completionError) {
-      params.api.logger.warn(
-        `agentkit: could not record failed verification attempt ${params.attempt.id}: ${String(completionError)}`,
-      );
-    }
+    await completeExternalVerificationWithRetry({
+      api: params.api,
+      attempt: params.attempt,
+      outcome: "failed",
+    });
     return;
   }
   if (params.attempt.signal.aborted) {
     return;
   }
 
-  let completion: Awaited<
-    ReturnType<typeof params.api.approvals.completeExternalVerification>
-  >;
-  try {
-    completion = await params.api.approvals.completeExternalVerification({
-      attemptId: params.attempt.id,
-      outcome: result.success ? "succeeded" : "failed",
-    });
-  } catch (error) {
-    if (!params.attempt.signal.aborted) {
-      params.api.logger.error(
-        `agentkit: could not record ${result.success ? "successful" : "failed"} World verification ${params.attempt.id}: ${String(error)}`,
-      );
-    }
+  const completion = await completeExternalVerificationWithRetry({
+    api: params.api,
+    attempt: params.attempt,
+    outcome: result.success ? "succeeded" : "failed",
+  });
+  if (!completion) {
     return;
   }
   if (!result.success) {
@@ -138,7 +192,7 @@ async function monitorWorldVerification(params: {
   try {
     const appConfig = params.api.runtime.config.current() as OpenClawConfig;
     const pluginConfig = resolveConfiguredAgentkitPluginConfig(appConfig);
-    const grant = upsertAgentkitExternalGrant({
+    const grant = await persistAgentkitExternalGrant({
       attempt: params.attempt,
       completion,
       pluginConfig,

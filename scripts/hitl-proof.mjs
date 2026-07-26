@@ -298,8 +298,9 @@ function createWorldRuntime() {
   };
 }
 
-async function waitFor(predicate, label) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+async function waitFor(predicate, label, timeoutMs = 1_000) {
+  const deadlineMs = Date.now() + timeoutMs;
+  while (Date.now() < deadlineMs) {
     if (predicate()) {
       return;
     }
@@ -602,11 +603,12 @@ async function assertDelegationContract(store) {
 
   const trustStore = createMemoryStore();
   let grantStorageAttempts = 0;
+  let grantStoreAvailable = false;
   const flakyTrustStore = {
     ...trustStore,
     registerIfAbsent(key, value) {
       grantStorageAttempts += 1;
-      if (grantStorageAttempts === 1) {
+      if (!grantStoreAvailable) {
         throw new Error("temporary grant store outage");
       }
       return trustStore.registerIfAbsent(key, value);
@@ -650,8 +652,16 @@ async function assertDelegationContract(store) {
     trustResponse.response,
   );
   assert.equal(trustResponse.response.statusCode, 200);
-  assert.equal(trustResponse.read().body.grantStored, true);
-  assert.equal(grantStorageAttempts, 2);
+  assert.equal(trustResponse.read().body.ok, true);
+  assert.equal(trustResponse.read().body.grantStored, false);
+  assert.equal(trustResponse.read().body.grantPersistence, "pending");
+  grantStoreAvailable = true;
+  await waitFor(
+    () => trustStore.lookup("grant-delegation-trust")?.status === "active",
+    "deferred delegation grant",
+    2_500,
+  );
+  assert.ok(grantStorageAttempts > 1);
   assert.equal(trustStore.lookup("grant-delegation-trust").status, "active");
 
   let observedSignal = null;

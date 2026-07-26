@@ -266,15 +266,25 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
       return true;
     }
 
-    let grantStored = false;
+    let grantPersistence: "stored" | "pending" | "not-applicable" = "not-applicable";
     try {
-      const grant = await persistAgentkitExternalGrant({
+      const persistence = await persistAgentkitExternalGrant({
         attempt: entry.attempt,
         completion,
         pluginConfig: entry.pluginConfig,
         store: entry.grantStore,
+        onDeferredStored: (grant) => {
+          entry.api.logger.info(
+            `agentkit: stored deferred delegation grant ${grant.id} for ${grant.toolName}`,
+          );
+        },
+        onDeferredFailure: (error) => {
+          entry.api.logger.error(
+            `agentkit: deferred delegation grant storage failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
+          );
+        },
       });
-      grantStored = grant?.status === "active";
+      grantPersistence = persistence.status;
     } catch (error) {
       entry.api.logger.error(
         `agentkit: delegation grant storage failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
@@ -282,14 +292,14 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
     }
     finish(entry);
     const completed = completion.applied || completion.attempt.outcome === "succeeded";
-    const trusted = entry.attempt.context.decision !== "allow-always" || grantStored;
-    const ok = completed && trusted;
+    const ok = completed;
     writeJson(res, ok ? 200 : 500, {
       ok,
       approvalId: entry.attempt.context.approvalId,
       attemptId: entry.attempt.id,
       decision: entry.attempt.context.decision,
-      grantStored,
+      grantStored: grantPersistence === "stored",
+      grantPersistence,
     });
     return true;
   };

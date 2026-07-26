@@ -266,26 +266,17 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
       return true;
     }
 
-    let grantPersistence: "stored" | "pending" | "not-applicable" = "not-applicable";
+    let grantPersistence: "stored" | "failed" | "not-applicable" = "not-applicable";
     try {
       const persistence = await persistAgentkitExternalGrant({
         attempt: entry.attempt,
         completion,
         pluginConfig: entry.pluginConfig,
         store: entry.grantStore,
-        onDeferredStored: (grant) => {
-          entry.api.logger.info(
-            `agentkit: stored deferred delegation grant ${grant.id} for ${grant.toolName}`,
-          );
-        },
-        onDeferredFailure: (error) => {
-          entry.api.logger.error(
-            `agentkit: deferred delegation grant storage failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
-          );
-        },
       });
       grantPersistence = persistence.status;
     } catch (error) {
+      grantPersistence = "failed";
       entry.api.logger.error(
         `agentkit: delegation grant storage failed for ${entry.attempt.context.approvalId}: ${String(error)}`,
       );

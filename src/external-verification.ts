@@ -197,24 +197,10 @@ async function monitorWorldVerification(params: {
       completion,
       pluginConfig,
       store: params.grantStore,
-      onDeferredStored: (grant) => {
-        params.api.logger.info(
-          `agentkit: stored deferred session grant ${grant.id} for ${grant.toolName}`,
-        );
-      },
-      onDeferredFailure: (error) => {
-        params.api.logger.error(
-          `agentkit: deferred grant storage failed for ${params.attempt.context.approvalId}: ${String(error)}`,
-        );
-      },
     });
     if (persistence.status === "stored") {
       params.api.logger.info(
         `agentkit: stored session grant ${persistence.grant.id} for ${persistence.grant.toolName}`,
-      );
-    } else if (persistence.status === "pending") {
-      params.api.logger.warn(
-        `agentkit: session grant storage queued for ${params.attempt.context.approvalId}`,
       );
     }
   } catch (error) {

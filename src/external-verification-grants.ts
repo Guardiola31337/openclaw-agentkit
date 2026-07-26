@@ -153,70 +153,16 @@ export function upsertAgentkitExternalGrant(params: {
 const GRANT_STORAGE_RETRY_INITIAL_MS = 100;
 const GRANT_STORAGE_RETRY_MAX_MS = 1_000;
 const GRANT_STORAGE_RETRY_BUDGET_MS = 5_000;
-const DEFERRED_GRANT_RETRY_INITIAL_MS = 1_000;
-const DEFERRED_GRANT_RETRY_MAX_MS = 30_000;
 
 export type AgentkitExternalGrantPersistenceResult =
   | { status: "stored"; grant: AgentkitExternalGrantRecord }
-  | { status: "pending"; grant: null }
   | { status: "not-applicable"; grant: AgentkitExternalGrantRecord | null };
-
-const pendingGrantPersistence = new Map<string, ReturnType<typeof setTimeout>>();
-
-function continueAgentkitExternalGrantPersistence(
-  params: {
-    attempt: PluginExternalVerificationAttempt;
-    completion: PluginExternalVerificationCompletionResult;
-    pluginConfig: AgentkitPluginConfig;
-    store: AgentkitExternalGrantStore;
-    onDeferredStored?: (grant: AgentkitExternalGrantRecord) => void;
-    onDeferredFailure?: (error: unknown) => void;
-  },
-  authorization: NonNullable<PluginExternalVerificationCompletionResult["grantAuthorization"]>,
-): void {
-  if (pendingGrantPersistence.has(authorization.id)) {
-    return;
-  }
-  const expiresAtMs = authorization.issuedAtMs + params.pluginConfig.hitl.grantTtlMs;
-  let retryDelayMs = DEFERRED_GRANT_RETRY_INITIAL_MS;
-  const retry = () => {
-    pendingGrantPersistence.delete(authorization.id);
-    try {
-      const grant = upsertAgentkitExternalGrant(params);
-      if (grant?.status === "active") {
-        params.onDeferredStored?.(grant);
-        return;
-      }
-      params.onDeferredFailure?.(new Error("grant authorization is no longer active"));
-    } catch (error) {
-      const remainingMs = expiresAtMs - Date.now();
-      if (remainingMs <= 0) {
-        params.onDeferredFailure?.(error);
-        return;
-      }
-      const timer = setTimeout(retry, Math.min(retryDelayMs, remainingMs));
-      timer.unref();
-      pendingGrantPersistence.set(authorization.id, timer);
-      retryDelayMs = Math.min(retryDelayMs * 2, DEFERRED_GRANT_RETRY_MAX_MS);
-    }
-  };
-  const remainingMs = expiresAtMs - Date.now();
-  if (remainingMs <= 0) {
-    params.onDeferredFailure?.(new Error("grant authorization expired before storage"));
-    return;
-  }
-  const timer = setTimeout(retry, Math.min(retryDelayMs, remainingMs));
-  timer.unref();
-  pendingGrantPersistence.set(authorization.id, timer);
-}
 
 export async function persistAgentkitExternalGrant(params: {
   attempt: PluginExternalVerificationAttempt;
   completion: PluginExternalVerificationCompletionResult;
   pluginConfig: AgentkitPluginConfig;
   store: AgentkitExternalGrantStore;
-  onDeferredStored?: (grant: AgentkitExternalGrantRecord) => void;
-  onDeferredFailure?: (error: unknown) => void;
 }): Promise<AgentkitExternalGrantPersistenceResult> {
   const authorization = params.completion.grantAuthorization;
   if (!authorization) {
@@ -241,8 +187,7 @@ export async function persistAgentkitExternalGrant(params: {
     } catch (error) {
       const remainingMs = retryDeadlineMs - Date.now();
       if (remainingMs <= 0) {
-        continueAgentkitExternalGrantPersistence(params, authorization);
-        return { status: "pending", grant: null };
+        throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, Math.min(retryDelayMs, remainingMs)));
       retryDelayMs = Math.min(retryDelayMs * 2, GRANT_STORAGE_RETRY_MAX_MS);

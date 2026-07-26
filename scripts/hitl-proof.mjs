@@ -654,15 +654,15 @@ async function assertDelegationContract(store) {
   assert.equal(trustResponse.response.statusCode, 200);
   assert.equal(trustResponse.read().body.ok, true);
   assert.equal(trustResponse.read().body.grantStored, false);
-  assert.equal(trustResponse.read().body.grantPersistence, "pending");
+  assert.equal(trustResponse.read().body.grantPersistence, "failed");
   grantStoreAvailable = true;
-  await waitFor(
-    () => trustStore.lookup("grant-delegation-trust")?.status === "active",
-    "deferred delegation grant",
-    2_500,
-  );
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
   assert.ok(grantStorageAttempts > 1);
-  assert.equal(trustStore.lookup("grant-delegation-trust").status, "active");
+  assert.equal(
+    trustStore.lookup("grant-delegation-trust"),
+    undefined,
+    "a failed grant write must not recover after the session can reset",
+  );
 
   let observedSignal = null;
   delegationVerificationTesting.setDelegationVerificationRuntimeDeps({

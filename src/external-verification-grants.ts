@@ -151,7 +151,8 @@ export function upsertAgentkitExternalGrant(params: {
 }
 
 const GRANT_STORAGE_RETRY_INITIAL_MS = 100;
-const GRANT_STORAGE_RETRY_MAX_MS = 5_000;
+const GRANT_STORAGE_RETRY_MAX_MS = 1_000;
+const GRANT_STORAGE_RETRY_BUDGET_MS = 5_000;
 
 export async function persistAgentkitExternalGrant(params: {
   attempt: PluginExternalVerificationAttempt;
@@ -163,13 +164,18 @@ export async function persistAgentkitExternalGrant(params: {
   if (!authorization) {
     return upsertAgentkitExternalGrant(params);
   }
-  const expiresAtMs = authorization.issuedAtMs + params.pluginConfig.hitl.grantTtlMs;
+  const authorizationExpiresAtMs =
+    authorization.issuedAtMs + params.pluginConfig.hitl.grantTtlMs;
+  const retryDeadlineMs = Math.min(
+    authorizationExpiresAtMs,
+    Date.now() + GRANT_STORAGE_RETRY_BUDGET_MS,
+  );
   let retryDelayMs = GRANT_STORAGE_RETRY_INITIAL_MS;
   for (;;) {
     try {
       return upsertAgentkitExternalGrant(params);
     } catch (error) {
-      const remainingMs = expiresAtMs - Date.now();
+      const remainingMs = retryDeadlineMs - Date.now();
       if (remainingMs <= 0) {
         throw error;
       }

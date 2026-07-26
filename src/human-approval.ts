@@ -249,6 +249,32 @@ function timeoutErrorForPollStatus(status: string | null): string {
   return status ? `timeout_${status}` : "timeout";
 }
 
+async function pollOnceBeforeDeadline(params: {
+  pollOnce: () => Promise<WorldApprovalPollStatus>;
+  remainingMs: number;
+  signal?: AbortSignal;
+}): Promise<
+  { outcome: "status"; status: WorldApprovalPollStatus } | { outcome: "timeout" }
+> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<{ outcome: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ outcome: "timeout" }), params.remainingMs);
+  });
+  try {
+    const status = awaitWithAbort(params.pollOnce(), params.signal).then(
+      (value): { outcome: "status"; status: WorldApprovalPollStatus } => ({
+        outcome: "status",
+        status: value,
+      }),
+    );
+    return await Promise.race([status, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function pollWorldApprovalUntilCompletion(params: {
   request: { pollOnce: () => Promise<WorldApprovalPollStatus> };
   timeoutMs: number;
@@ -260,13 +286,14 @@ async function pollWorldApprovalUntilCompletion(params: {
 > {
   const pollIntervalMs = Math.max(250, params.pollIntervalMs ?? 1_000);
   const timeoutMs = Math.max(1_000, params.timeoutMs);
-  const startedAtMs = Date.now();
+  const deadlineMs = Date.now() + timeoutMs;
   let lastStatus: string | null = null;
   let lastPollError: string | null = null;
 
   while (true) {
     params.signal?.throwIfAborted();
-    if (Date.now() - startedAtMs > timeoutMs) {
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
       return {
         success: false,
         error: lastPollError ?? timeoutErrorForPollStatus(lastStatus),
@@ -277,15 +304,30 @@ async function pollWorldApprovalUntilCompletion(params: {
     let status: WorldApprovalPollStatus;
     try {
       // IDKit 4.1.x exposes no signal on pollOnce; race its in-flight bridge
-      // request so run cancellation never strands the verifier lifecycle.
-      status = await awaitWithAbort(params.request.pollOnce(), params.signal);
+      // request against both cancellation and the proof deadline.
+      const polled = await pollOnceBeforeDeadline({
+        pollOnce: params.request.pollOnce,
+        remainingMs,
+        signal: params.signal,
+      });
+      if (polled.outcome === "timeout") {
+        return {
+          success: false,
+          error: lastPollError ?? timeoutErrorForPollStatus(lastStatus),
+          lastStatus,
+        };
+      }
+      status = polled.status;
       lastPollError = null;
     } catch (error) {
       if (params.signal?.aborted) {
         throw params.signal.reason;
       }
       lastPollError = normalizeRuntimeError(error);
-      await waitForPollInterval(pollIntervalMs, params.signal);
+      await waitForPollInterval(
+        Math.min(pollIntervalMs, Math.max(1, deadlineMs - Date.now())),
+        params.signal,
+      );
       continue;
     }
     lastStatus = normalizePollStatusType(status.type) ?? lastStatus;
@@ -303,7 +345,10 @@ async function pollWorldApprovalUntilCompletion(params: {
         lastStatus,
       };
     }
-    await waitForPollInterval(pollIntervalMs, params.signal);
+    await waitForPollInterval(
+      Math.min(pollIntervalMs, Math.max(1, deadlineMs - Date.now())),
+      params.signal,
+    );
   }
 }
 

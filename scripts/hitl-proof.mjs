@@ -1069,6 +1069,26 @@ async function assertPollCancellation() {
   assert.equal(polls, 1, "abort must release the polling loop");
 }
 
+async function assertPollDeadline() {
+  let polls = 0;
+  const result = await humanApprovalTesting.pollWorldApprovalUntilCompletion({
+    request: {
+      pollOnce: async () => {
+        polls += 1;
+        return await new Promise(() => {});
+      },
+    },
+    timeoutMs: 1_000,
+    pollIntervalMs: 250,
+  });
+  assert.deepEqual(result, {
+    success: false,
+    error: "timeout",
+    lastStatus: null,
+  });
+  assert.equal(polls, 1, "deadline must release an in-flight poll");
+}
+
 async function assertWorldIdentifierValidation() {
   const createCustomConfig = ({ appId = "app_agentkit", rpId = "rp_agentkit" } = {}) =>
     resolveAgentkitPluginConfig({
@@ -1137,6 +1157,7 @@ async function main() {
     await assertFailureRetryAndAbort(appConfig);
     await assertSuccessfulCompletionFailureStaysSuccessful(appConfig);
     await assertPollCancellation();
+    await assertPollDeadline();
     await assertWorldIdentifierValidation();
   } finally {
     externalVerificationTesting.resetExternalVerificationRuntimeDeps();

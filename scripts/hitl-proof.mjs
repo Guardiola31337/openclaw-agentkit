@@ -28,7 +28,9 @@ import {
 import {
   __testing as humanApprovalTesting,
   resolveAgentkitHumanApprovalRequestConfig,
+  startAgentkitWorldHumanApprovalSession,
 } from "../dist/src/human-approval.js";
+import { resolveAgentkitStatus } from "../dist/src/status.js";
 
 const TOOL_NAME = "shell.exec";
 const SESSION_KEY = "session-key-1";
@@ -56,6 +58,46 @@ const NOW_MS = 1_800_000_000_000;
   controller.abort(new Error("broker request cancelled"));
   await assert.rejects(brokerRequest, /broker request cancelled/);
   assert.equal(observedSignal, controller.signal);
+}
+
+{
+  const controller = new AbortController();
+  let initializationStarted = false;
+  const initialization = startAgentkitWorldHumanApprovalSession({
+    approval: {
+      id: "approval-init-abort",
+      request: { title: "Approval", description: "Approval", toolName: TOOL_NAME },
+    },
+    pluginConfig: resolveAgentkitPluginConfig(createConfig().plugins.entries.agentkit.config),
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          appId: "app_test",
+          rpId: "rp_test",
+          nonce: "nonce",
+          createdAt: 1,
+          expiresAt: 2,
+          signature: "signature",
+          environment: "staging",
+        }),
+        { status: 200 },
+      ),
+    worldIdRuntime: {
+      IDKit: {
+        request: () => ({
+          preset: async () => {
+            initializationStarted = true;
+            return await new Promise(() => {});
+          },
+        }),
+      },
+      orbLegacy: () => ({}),
+    },
+    signal: controller.signal,
+  });
+  await waitFor(() => initializationStarted, "World request initialization");
+  controller.abort(new Error("World request initialization cancelled"));
+  await assert.rejects(initialization, /World request initialization cancelled/);
 }
 
 function createConfig(mode = "human-approval") {
@@ -591,6 +633,9 @@ async function assertDelegationContract(store) {
     tlsRuntime.handler(tlsAttempt.attempt),
     /requires Gateway TLS to be disabled/,
   );
+  const tlsStatus = await resolveAgentkitStatus({ appConfig: tlsConfig, env: process.env });
+  assert.equal(tlsStatus.checks.readyForHitl, false);
+  assert.ok(tlsStatus.nextSteps.some((step) => step.includes("Disable Gateway TLS")));
 }
 
 async function assertVerifyOnce(appConfig, store, world) {

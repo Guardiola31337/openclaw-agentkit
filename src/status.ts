@@ -78,6 +78,7 @@ function buildNextSteps(params: {
   humanApprovalAppId: string | null;
   humanApprovalRpId: string | null;
   humanApprovalSigningKeyConfigured: boolean;
+  gatewayTlsEnabled: boolean;
   walletAddress: string | null;
   cliCommand: string;
   cliAvailable: boolean;
@@ -94,6 +95,11 @@ function buildNextSteps(params: {
   if (params.hitlMode === "delegation" && !params.cliAvailable) {
     steps.push(
       `Install the AgentKit CLI or expose \`${params.cliCommand}\` on PATH. For an npx-based setup, set \`plugins.entries.agentkit.config.cli.command="npx"\` and \`plugins.entries.agentkit.config.cli.args=["-y","@worldcoin/agentkit-cli"]\`.`,
+    );
+  }
+  if (params.hitlMode === "delegation" && params.gatewayTlsEnabled) {
+    steps.push(
+      "Disable Gateway TLS before using AgentKit delegation HITL; the current signed-resource verifier is loopback-only and fails closed when TLS is enabled.",
     );
   }
   if (params.hitlMode === "delegation" && params.walletAddress && params.cliAvailable) {
@@ -226,6 +232,7 @@ export async function resolveAgentkitStatus(params: {
     pluginConfig.hitl.mode === "human-approval" &&
     (readyForHostedHumanApproval || readyForCustomHumanApproval) &&
     pluginConfig.hitl.protectedTools.length > 0;
+  const gatewayTlsEnabled = params.appConfig.gateway?.tls?.enabled === true;
 
   return {
     phase: "world-agentkit",
@@ -265,6 +272,7 @@ export async function resolveAgentkitStatus(params: {
         pluginConfig.hitl.mode === "delegation"
           ? entryState.effectiveEnabled &&
             pluginConfig.hitl.enabled &&
+            !gatewayTlsEnabled &&
             pluginConfig.hitl.protectedTools.length > 0
           : readyForHumanApproval,
       readyForHumanApproval,
@@ -279,6 +287,7 @@ export async function resolveAgentkitStatus(params: {
       humanApprovalAppId: humanApproval.appId,
       humanApprovalRpId: humanApproval.rpId,
       humanApprovalSigningKeyConfigured,
+      gatewayTlsEnabled,
       walletAddress,
       cliCommand: pluginConfig.cli.command,
       cliAvailable,

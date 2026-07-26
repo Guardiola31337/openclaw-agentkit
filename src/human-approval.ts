@@ -567,23 +567,25 @@ export async function startAgentkitWorldHumanApprovalSession(params: {
   });
   params.signal?.throwIfAborted();
 
-  const request = await withWorldIdCoreFileFetchCompat(() =>
-    runtime.IDKit.request({
-      app_id: rpSignature.appId,
-      action,
-      action_description: actionDescription,
-      rp_context: {
-        rp_id: rpSignature.rpId,
-        nonce: rpSignature.nonce,
-        created_at: rpSignature.createdAt,
-        expires_at: rpSignature.expiresAt,
-        signature: rpSignature.signature,
-      },
-      allow_legacy_proofs: true,
-      environment: rpSignature.environment,
-    }).preset(runtime.orbLegacy()),
+  const request = await awaitWithAbort(
+    withWorldIdCoreFileFetchCompat(() =>
+      runtime.IDKit.request({
+        app_id: rpSignature.appId,
+        action,
+        action_description: actionDescription,
+        rp_context: {
+          rp_id: rpSignature.rpId,
+          nonce: rpSignature.nonce,
+          created_at: rpSignature.createdAt,
+          expires_at: rpSignature.expiresAt,
+          signature: rpSignature.signature,
+        },
+        allow_legacy_proofs: true,
+        environment: rpSignature.environment,
+      }).preset(runtime.orbLegacy()),
+    ),
+    params.signal,
   );
-  params.signal?.throwIfAborted();
   return {
     approvalId: params.approval.id,
     action,

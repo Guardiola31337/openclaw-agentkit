@@ -7,7 +7,7 @@ on:
 
 env:
   OPENCLAW_HOST_API_REPOSITORY: Guardiola31337/openclaw
-  OPENCLAW_HOST_API_REF: feat/external-verification-runtime
+  OPENCLAW_HOST_API_REF: feat/external-verification-runtime-minimal
 
 jobs:
   build:

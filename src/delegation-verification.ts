@@ -9,6 +9,7 @@ import type { PluginExternalVerificationAttempt } from "openclaw/plugin-sdk/plug
 import { AGENTKIT } from "./agentkit.runtime.js";
 import type { AgentkitPluginConfig } from "./config.js";
 import {
+  type AgentkitExternalGrantSessionLease,
   type AgentkitExternalGrantStore,
   persistAgentkitExternalGrant,
 } from "./external-verification-grants.js";
@@ -25,6 +26,7 @@ type ActiveDelegationAttempt = {
   onAbort: () => void;
   pluginConfig: AgentkitPluginConfig;
   resourceUrl: string;
+  sessionLease: AgentkitExternalGrantSessionLease | null;
   token: string;
 };
 
@@ -91,12 +93,14 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
       activeDelegationAttempts.delete(entry.token);
     }
     entry.attempt.signal.removeEventListener("abort", entry.onAbort);
+    entry.sessionLease?.release();
   };
 
   const start = async (startParams: {
     attempt: PluginExternalVerificationAttempt;
     grantStore: AgentkitExternalGrantStore;
     pluginConfig: AgentkitPluginConfig;
+    sessionLease: AgentkitExternalGrantSessionLease | null;
   }): Promise<void> => {
     startParams.attempt.signal.throwIfAborted();
     const token = randomBytes(24).toString("base64url");
@@ -119,6 +123,7 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
       onAbort,
       pluginConfig: startParams.pluginConfig,
       resourceUrl,
+      sessionLease: startParams.sessionLease,
       token,
     };
     activeDelegationAttempts.set(token, entry);
@@ -272,6 +277,7 @@ export function createAgentkitDelegationVerificationRuntime(params: { api: OpenC
         attempt: entry.attempt,
         completion,
         pluginConfig: entry.pluginConfig,
+        sessionLease: entry.sessionLease,
         store: entry.grantStore,
       });
       grantPersistence = persistence.status;

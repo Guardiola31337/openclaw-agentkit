@@ -43,6 +43,47 @@ export type AgentkitExternalGrantStore = {
   ) => boolean;
 };
 
+export type AgentkitExternalGrantSessionLease = {
+  isTerminated: () => boolean;
+  release: () => void;
+};
+
+export type AgentkitExternalGrantSessionGuard = {
+  begin: (sessionId: string) => AgentkitExternalGrantSessionLease;
+  terminate: (sessionId: string) => void;
+};
+
+export function createAgentkitExternalGrantSessionGuard(): AgentkitExternalGrantSessionGuard {
+  const sessions = new Map<string, { active: number; terminated: boolean }>();
+  return {
+    begin(sessionId) {
+      const state = sessions.get(sessionId) ?? { active: 0, terminated: false };
+      state.active += 1;
+      sessions.set(sessionId, state);
+      let released = false;
+      return {
+        isTerminated: () => state.terminated,
+        release: () => {
+          if (released) {
+            return;
+          }
+          released = true;
+          state.active -= 1;
+          if (state.active === 0) {
+            sessions.delete(sessionId);
+          }
+        },
+      };
+    },
+    terminate(sessionId) {
+      const state = sessions.get(sessionId);
+      if (state) {
+        state.terminated = true;
+      }
+    },
+  };
+}
+
 export function openAgentkitExternalGrantStore(api: OpenClawPluginApi): AgentkitExternalGrantStore {
   return api.approvals.openGrantStore<AgentkitExternalGrantRecord>();
 }
@@ -162,6 +203,7 @@ export async function persistAgentkitExternalGrant(params: {
   attempt: PluginExternalVerificationAttempt;
   completion: PluginExternalVerificationCompletionResult;
   pluginConfig: AgentkitPluginConfig;
+  sessionLease: AgentkitExternalGrantSessionLease | null;
   store: AgentkitExternalGrantStore;
 }): Promise<AgentkitExternalGrantPersistenceResult> {
   const authorization = params.completion.grantAuthorization;
@@ -179,6 +221,9 @@ export async function persistAgentkitExternalGrant(params: {
   );
   let retryDelayMs = GRANT_STORAGE_RETRY_INITIAL_MS;
   for (;;) {
+    if (params.sessionLease?.isTerminated()) {
+      return { status: "not-applicable", grant: null };
+    }
     try {
       const grant = upsertAgentkitExternalGrant(params);
       return grant?.status === "active"
@@ -242,7 +287,10 @@ export function resetAgentkitExternalSessionGrants(params: {
   return reset;
 }
 
-export function createAgentkitSessionEndHook(api: OpenClawPluginApi) {
+export function createAgentkitSessionEndHook(
+  api: OpenClawPluginApi,
+  sessionGuard: AgentkitExternalGrantSessionGuard = createAgentkitExternalGrantSessionGuard(),
+) {
   const getStore = createAgentkitExternalGrantStoreAccessor(api);
   return (event: { sessionId: string; reason?: string }): void => {
     switch (event.reason) {
@@ -255,6 +303,9 @@ export function createAgentkitSessionEndHook(api: OpenClawPluginApi) {
       default:
         return;
     }
+    // Mark active verification leases first so a retry cannot insert trust
+    // between the lifecycle boundary and the durable grant tombstone pass.
+    sessionGuard.terminate(event.sessionId);
     resetAgentkitExternalSessionGrants({
       sessionId: event.sessionId,
       store: getStore(),

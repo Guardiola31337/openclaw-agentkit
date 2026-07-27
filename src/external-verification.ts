@@ -6,9 +6,12 @@ import type {
 import { resolveConfiguredAgentkitPluginConfig } from "./config.js";
 import { createAgentkitDelegationVerificationRuntime } from "./delegation-verification.js";
 import {
+  createAgentkitExternalGrantSessionGuard,
   createAgentkitExternalGrantStoreAccessor,
   openAgentkitExternalGrantStore,
   persistAgentkitExternalGrant,
+  type AgentkitExternalGrantSessionGuard,
+  type AgentkitExternalGrantSessionLease,
   type AgentkitExternalGrantStore,
 } from "./external-verification-grants.js";
 import type { AgentkitPendingApproval } from "./hitl-approvals.js";
@@ -147,10 +150,11 @@ function formatChallenge(params: {
   return lines.join("\n");
 }
 
-async function monitorWorldVerification(params: {
+async function monitorWorldVerificationSession(params: {
   api: OpenClawPluginApi;
   attempt: PluginExternalVerificationAttempt;
   grantStore: AgentkitExternalGrantStore;
+  sessionLease: AgentkitExternalGrantSessionLease | null;
   session: AgentkitHumanApprovalSession;
 }): Promise<void> {
   let result: AgentkitHumanApprovalSessionResult;
@@ -196,6 +200,7 @@ async function monitorWorldVerification(params: {
       attempt: params.attempt,
       completion,
       pluginConfig,
+      sessionLease: params.sessionLease,
       store: params.grantStore,
     });
     if (persistence.status === "stored") {
@@ -210,45 +215,73 @@ async function monitorWorldVerification(params: {
   }
 }
 
-export function createAgentkitExternalVerificationRuntime(api: OpenClawPluginApi) {
+async function monitorWorldVerification(
+  params: Parameters<typeof monitorWorldVerificationSession>[0],
+): Promise<void> {
+  try {
+    await monitorWorldVerificationSession(params);
+  } finally {
+    params.sessionLease?.release();
+  }
+}
+
+export function createAgentkitExternalVerificationRuntime(
+  api: OpenClawPluginApi,
+  options: { sessionGuard?: AgentkitExternalGrantSessionGuard } = {},
+) {
   const deps = externalVerificationRuntimeDeps;
+  const sessionGuard = options.sessionGuard ?? createAgentkitExternalGrantSessionGuard();
   const getGrantStore = createAgentkitExternalGrantStoreAccessor(api, deps.openGrantStore);
   const delegation = createAgentkitDelegationVerificationRuntime({ api });
   const handler = async (attempt: PluginExternalVerificationAttempt): Promise<void> => {
-    const grantStore = getGrantStore();
-    const appConfig = api.runtime.config.current() as OpenClawConfig;
-    const pluginConfig = resolveConfiguredAgentkitPluginConfig(appConfig);
-    if (!pluginConfig.hitl.enabled) {
-      throw new Error("AgentKit World verification is not enabled");
-    }
-    if (pluginConfig.hitl.mode === "delegation") {
-      await delegation.start({
+    const sessionLease = attempt.context.sessionId
+      ? sessionGuard.begin(attempt.context.sessionId)
+      : null;
+    let leaseTransferred = false;
+    try {
+      const grantStore = getGrantStore();
+      const appConfig = api.runtime.config.current() as OpenClawConfig;
+      const pluginConfig = resolveConfiguredAgentkitPluginConfig(appConfig);
+      if (!pluginConfig.hitl.enabled) {
+        throw new Error("AgentKit World verification is not enabled");
+      }
+      if (pluginConfig.hitl.mode === "delegation") {
+        await delegation.start({
+          attempt,
+          grantStore,
+          pluginConfig,
+          sessionLease,
+        });
+        leaseTransferred = true;
+        return;
+      }
+      const session = await deps.startWorldHumanApprovalSession({
+        approval: toPendingApproval(attempt),
+        pluginConfig,
+        env: process.env,
+        signal: attempt.signal,
+        timeoutMs: Math.max(1_000, attempt.context.expiresAtMs - Date.now()),
+      });
+      if (attempt.signal.aborted) {
+        return;
+      }
+      const qrText = await deps.renderQrCodeToString(session.connectorURI);
+      await attempt.present({
+        message: formatChallenge({ attempt, qrText, session }),
+      });
+      void monitorWorldVerification({
+        api,
         attempt,
         grantStore,
-        pluginConfig,
+        sessionLease,
+        session,
       });
-      return;
+      leaseTransferred = true;
+    } finally {
+      if (!leaseTransferred) {
+        sessionLease?.release();
+      }
     }
-    const session = await deps.startWorldHumanApprovalSession({
-      approval: toPendingApproval(attempt),
-      pluginConfig,
-      env: process.env,
-      signal: attempt.signal,
-      timeoutMs: Math.max(1_000, attempt.context.expiresAtMs - Date.now()),
-    });
-    if (attempt.signal.aborted) {
-      return;
-    }
-    const qrText = await deps.renderQrCodeToString(session.connectorURI);
-    await attempt.present({
-      message: formatChallenge({ attempt, qrText, session }),
-    });
-    void monitorWorldVerification({
-      api,
-      attempt,
-      grantStore,
-      session,
-    });
   };
   return {
     handler,

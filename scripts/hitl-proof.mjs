@@ -6,6 +6,7 @@ import path from "node:path";
 
 import {
   applyAgentkitExternalGrant,
+  createAgentkitExternalGrantSessionGuard,
   createAgentkitExternalGrantStoreAccessor,
   createAgentkitSessionEndHook,
   resetAgentkitExternalSessionGrants,
@@ -865,6 +866,61 @@ async function assertVerifyAndTrust(appConfig, store, world) {
   );
 }
 
+async function assertGrantRetryStopsAtSessionBoundary(appConfig) {
+  const store = createMemoryStore();
+  const world = createWorldRuntime();
+  const sessionGuard = createAgentkitExternalGrantSessionGuard();
+  let grantStorageAttempts = 0;
+  const flakyStore = {
+    ...store,
+    registerIfAbsent(key, value) {
+      grantStorageAttempts += 1;
+      if (grantStorageAttempts === 1) {
+        throw new Error("temporary grant store outage");
+      }
+      return store.registerIfAbsent(key, value);
+    },
+  };
+  const attempt = createAttempt({
+    id: "attempt-reset-during-grant-retry",
+    approvalId: "approval-reset-during-grant-retry",
+    decision: "allow-always",
+  });
+  const authorization = {
+    id: "grant-reset-during-retry",
+    issuedAtMs: NOW_MS,
+    approvalId: attempt.attempt.context.approvalId,
+    attemptId: attempt.attempt.id,
+    decision: "allow-always",
+  };
+  const api = createApi({
+    appConfig,
+    store: flakyStore,
+    completeExternalVerification: async () =>
+      completionFor(attempt.attempt, "allow-always", authorization),
+  });
+  externalVerificationTesting.setExternalVerificationRuntimeDeps({
+    openGrantStore: () => flakyStore,
+    renderQrCodeToString: async () => null,
+    startWorldHumanApprovalSession: world.start,
+  });
+  const runtime = createAgentkitExternalVerificationRuntime(api, { sessionGuard });
+  await runtime.handler(attempt.attempt);
+  world.sessions.get(attempt.attempt.id).succeed();
+  await waitFor(() => grantStorageAttempts === 1, "initial failed grant write");
+
+  createAgentkitSessionEndHook(api, sessionGuard)({
+    sessionId: SESSION_ID,
+    sessionKey: SESSION_KEY,
+    messageCount: 1,
+    reason: "reset",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  assert.equal(grantStorageAttempts, 1, "session reset must stop the delayed grant write");
+  assert.equal(store.lookup(authorization.id), undefined);
+}
+
 async function assertExpiryAndResetTombstones(appConfig) {
   const store = createMemoryStore();
   const attempt = createAttempt({
@@ -1184,6 +1240,7 @@ async function main() {
     await assertDelegationContract(createMemoryStore());
     await assertVerifyOnce(appConfig, store, world);
     await assertVerifyAndTrust(appConfig, store, world);
+    await assertGrantRetryStopsAtSessionBoundary(appConfig);
     await assertExpiryAndResetTombstones(appConfig);
     await assertFailureRetryAndAbort(appConfig);
     await assertSuccessfulCompletionFailureStaysSuccessful(appConfig);

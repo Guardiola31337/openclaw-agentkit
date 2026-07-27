@@ -1099,6 +1099,27 @@ async function assertPollDeadline() {
   assert.equal(polls, 1, "deadline must release an in-flight poll");
 }
 
+async function assertPollPreservesRequestReceiver() {
+  const request = {
+    polled: false,
+    async pollOnce() {
+      assert.equal(this, request, "IDKit pollOnce must retain its request receiver");
+      this.polled = true;
+      return { type: "confirmed", result: { proof: "receiver-bound" } };
+    },
+  };
+  const result = await humanApprovalTesting.pollWorldApprovalUntilCompletion({
+    request,
+    timeoutMs: 1_000,
+  });
+  assert.equal(request.polled, true);
+  assert.deepEqual(result, {
+    success: true,
+    result: { proof: "receiver-bound" },
+    lastStatus: "confirmed",
+  });
+}
+
 async function assertWorldIdentifierValidation() {
   const createCustomConfig = ({ appId = "app_agentkit", rpId = "rp_agentkit" } = {}) =>
     resolveAgentkitPluginConfig({
@@ -1168,6 +1189,7 @@ async function main() {
     await assertSuccessfulCompletionFailureStaysSuccessful(appConfig);
     await assertPollCancellation();
     await assertPollDeadline();
+    await assertPollPreservesRequestReceiver();
     await assertWorldIdentifierValidation();
   } finally {
     externalVerificationTesting.resetExternalVerificationRuntimeDeps();

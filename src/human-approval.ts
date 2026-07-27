@@ -306,7 +306,8 @@ async function pollWorldApprovalUntilCompletion(params: {
       // IDKit 4.1.x exposes no signal on pollOnce; race its in-flight bridge
       // request against both cancellation and the proof deadline.
       const polled = await pollOnceBeforeDeadline({
-        pollOnce: params.request.pollOnce,
+        // IDKit's request method reads its wasm bridge through `this`.
+        pollOnce: () => params.request.pollOnce(),
         remainingMs,
         signal: params.signal,
       });

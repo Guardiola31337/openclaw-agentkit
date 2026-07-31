@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { __testing as cliTesting } from "../dist/src/cli.js";
 import { createAgentkitCommand, __testing as commandTesting } from "../dist/src/command.js";
 import { createAgentkitBeforeToolCallHook } from "../dist/src/hitl.js";
 import { __testing as humanApprovalTesting } from "../dist/src/human-approval-background.js";
@@ -11,6 +12,30 @@ import { __testing as humanApprovalTesting } from "../dist/src/human-approval-ba
 const TOOL_NAME = "shell.exec";
 const SESSION_KEY = "session-1";
 const AGENT_ID = "agent-1";
+
+function assertVerifierPortValidation() {
+  assert.equal(cliTesting.parseAgentkitVerifierPort(undefined), undefined);
+  assert.equal(cliTesting.parseAgentkitVerifierPort("1"), 1);
+  assert.equal(cliTesting.parseAgentkitVerifierPort("65535"), 65_535);
+
+  for (const value of [
+    "",
+    "0",
+    "-1",
+    "+123",
+    " 123",
+    "1.5",
+    "1e3",
+    "123abc",
+    "65536",
+    "99999999999999999999",
+  ]) {
+    assert.throws(
+      () => cliTesting.parseAgentkitVerifierPort(value),
+      new Error(`Invalid verifier server port: ${value}`),
+    );
+  }
+}
 
 function createConfig(grantsFile) {
   return {
@@ -253,6 +278,7 @@ async function main() {
   const grantsFile = path.join(tmpDir, "grants.json");
   const appConfig = createConfig(grantsFile);
   try {
+    assertVerifierPortValidation();
     await assertHookRequiresWorldApproval(appConfig);
     await assertAllowOnceResolvesSelectedApproval(appConfig);
     await assertAllowAlwaysPersistsGrantAndResolvesMatchingApprovals(appConfig, grantsFile);

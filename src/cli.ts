@@ -45,6 +45,22 @@ export const AGENTKIT_CLI_DESCRIPTOR: OpenClawPluginCliCommandDescriptor = {
   hasSubcommands: true,
 };
 
+function parseAgentkitVerifierPort(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const port = Number(value);
+  if (
+    !/^[0-9]+$/.test(value) ||
+    !Number.isSafeInteger(port) ||
+    port < 1 ||
+    port > 65_535
+  ) {
+    throw new Error(`Invalid verifier server port: ${value}`);
+  }
+  return port;
+}
+
 function resolveHumanLookupModeFromResponse(responseBody: unknown): string | null {
   if (!responseBody || typeof responseBody !== "object" || Array.isArray(responseBody)) {
     return null;
@@ -134,10 +150,7 @@ async function runAgentkitVerifierServerCommand(opts: {
   network?: string;
   statement?: string;
 }) {
-  const parsedPort = opts.port ? Number.parseInt(opts.port, 10) : undefined;
-  if (opts.port && Number.isNaN(parsedPort)) {
-    throw new Error(`Invalid verifier server port: ${opts.port}`);
-  }
+  const parsedPort = parseAgentkitVerifierPort(opts.port);
 
   const humanLookup = resolveAgentkitHumanLookup({
     localTrustVerifiedSigner: opts.localTrustVerifiedSigner,
@@ -681,5 +694,6 @@ export function registerAgentkitCli(program: Command, appConfig: OpenClawConfig)
 }
 
 export const __testing = {
+  parseAgentkitVerifierPort,
   runAgentkitApproveCommand,
 };

@@ -70,7 +70,7 @@
   "devDependencies": {
     "@types/node": "^22.15.0",
     "commander": "^14.0.3",
-    "openclaw": "2026.5.16-beta.1",
+    "openclaw": "2026.8.1",
     "typescript": "^5.9.3"
   },
   "openclaw": {

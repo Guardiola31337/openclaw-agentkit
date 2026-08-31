@@ -20,9 +20,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const PLUGIN_ID = "agentkit";
 const TOOL_NAME = "exec";
 const OTHER_TOOL_NAME = "shell.exec";
-const SESSION_KEY = "agentkit-e2e-session";
+const SESSION_KEY = "agent:main:agentkit-e2e-session";
 const SESSION_ID = "agentkit-e2e-session-lifecycle";
-const AGENT_ID = "agentkit-e2e-agent";
+const AGENT_ID = "main";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -68,17 +68,20 @@ async function ensureSymlink(target, linkPath) {
 
 async function importNamedDistFunction(openclawRoot, filePattern, functionName) {
   const distDir = path.join(openclawRoot, "dist");
-  const fileName = (await readdir(distDir))
-    .filter((name) => filePattern.test(name))
-    .sort()
-    .at(0);
-  assert.ok(fileName, `could not find ${String(filePattern)} in ${distDir}`);
-  const module = await import(pathToFileURL(path.join(distDir, fileName)).href);
-  const value = Object.values(module).find(
-    (candidate) => typeof candidate === "function" && candidate.name === functionName,
-  );
-  assert.equal(typeof value, "function", `${functionName} was not exported from ${fileName}`);
-  return value;
+  const fileNames = (await readdir(distDir)).filter((name) => filePattern.test(name)).sort();
+  assert.ok(fileNames.length > 0, `could not find ${String(filePattern)} in ${distDir}`);
+  // Bundler chunk names drift between OpenClaw releases; scan every match for
+  // the named export instead of trusting the first file alphabetically.
+  for (const fileName of fileNames) {
+    const module = await import(pathToFileURL(path.join(distDir, fileName)).href);
+    const value = Object.values(module).find(
+      (candidate) => typeof candidate === "function" && candidate.name === functionName,
+    );
+    if (typeof value === "function") {
+      return value;
+    }
+  }
+  assert.fail(`${functionName} was not exported from any of ${fileNames.join(", ")}`);
 }
 
 function createOpenClawConfig(port, mode) {
@@ -248,7 +251,7 @@ async function main() {
 
     const startGatewayServer = await importNamedDistFunction(
       openclawRoot,
-      /^server\.impl.*\.js$/,
+      /^server-.*\.js$/,
       "startGatewayServer",
     );
     gatewayServer = await startGatewayServer(port, {
@@ -275,6 +278,21 @@ async function main() {
       openclawRoot,
       /^hook-runner-global-.*\.js$/,
       "getGlobalHookRunner",
+    );
+    const withGatewayToolCallerIdentity = await importNamedDistFunction(
+      openclawRoot,
+      /^gateway-caller-context-.*\.js$/,
+      "withGatewayToolCallerIdentity",
+    );
+    const claimAgentRunDelegatedAuthority = await importNamedDistFunction(
+      openclawRoot,
+      /^agent-run-registry-.*\.js$/,
+      "claimAgentRunDelegatedAuthority",
+    );
+    const releaseAgentRunDelegatedAuthority = await importNamedDistFunction(
+      openclawRoot,
+      /^agent-run-registry-.*\.js$/,
+      "releaseAgentRunDelegatedAuthority",
     );
 
     await withOperatorApprovalsGatewayClient(
@@ -309,17 +327,38 @@ async function main() {
           sessionId = SESSION_ID,
           sessionKey = SESSION_KEY,
         }) =>
-          runBeforeToolCallHook({
-            toolName,
-            params: { cmd: `echo ${runId}` },
-            toolCallId,
-            ctx: {
-              agentId: AGENT_ID,
-              sessionKey,
-              sessionId,
-              runId,
-            },
-          });
+          // OpenClaw 2.0 derives approval ownership from the gateway caller
+          // identity and requires active delegated run authority, never hook
+          // payload fields; admit the run and stamp identity the way a
+          // gateway-managed tool invocation does.
+          (async () => {
+            const operationalRunInstance = { instanceId: `e2e-${runId}`, runId };
+            const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+            try {
+              return await withGatewayToolCallerIdentity(
+                {
+                  agentId: AGENT_ID,
+                  sessionKey,
+                  approvalOwnerPluginId: PLUGIN_ID,
+                  operationalRunInstance,
+                },
+                () =>
+                  runBeforeToolCallHook({
+                    toolName,
+                    params: { cmd: `echo ${runId}` },
+                    toolCallId,
+                    ctx: {
+                      agentId: AGENT_ID,
+                      sessionKey,
+                      sessionId,
+                      runId,
+                    },
+                  }),
+              );
+            } finally {
+              releaseAgentRunDelegatedAuthority(authority);
+            }
+          })();
         const dispatch = async ({ approvalId, decision, interactionId }) =>
           await startExternalVerificationForReviewer({
             approvalId,

@@ -96,6 +96,61 @@ from a replayed completion. Reset boundaries include explicit `new`/`reset`,
 automatic `idle`/`daily` rollover, and session deletion; compaction and Gateway
 restart/shutdown do not revoke an otherwise valid grant.
 
+## OpenClaw 2.0 host behavior
+
+The contract above is unchanged on OpenClaw 2.0 (2026.8.1); the plugin runs
+unmodified. The 2.0 host adds two behaviors to the same contract and changes
+internals that only host-slice authors need to know.
+
+Contract additions:
+
+- **Session-grant coverage.** When an `allow-always` completion mints a grant,
+  the host resolves approvals already pending that match the grant predicate
+  exactly (owner plugin, tool, session key, ephemeral session id, unexpired,
+  `allow-once` offered). Each covered approval is recorded in the attempts
+  ledger as a synthetic succeeded attempt with terminal source
+  `session-grant-covered`; its interaction id is the recomputable sha256 of the
+  grant authorization id and the approval id. Reviewers complete one ceremony
+  for a session, including calls that raced the scan.
+- **Ceremony pinning.** Run-end cleanup spares an approval whose external
+  verification attempt is live in the host process, so a reviewer's in-flight
+  challenge stays valid when the model abandons the blocked call. The
+  abandoned call never executes; the approval's own expiry still bounds the
+  pin. Policy-driven closures (permission change, scope closed, worker
+  fencing) and Gateway shutdown still cancel fail-closed.
+
+Host internals that moved under the contract (slice authors only):
+
+- Approval ownership is derived from the signed agent runtime identity; the
+  public payload never carries `pluginId`. Internal approval-runtime callers
+  are the only source of `externalResolution`, `runId`, and `sessionId`.
+- Runs execute hooks from per-run plugin generation registries loaded in
+  discovery mode; the `api.approvals` surface is served to every registration
+  mode that can register hooks.
+- `operator_approvals.resolution_ref` is a reserved canonical approval
+  identifier and cannot carry grant linkage; the attempts ledger is the audit
+  surface for ceremonyless authorization.
+- The attempts table ships as a same-version additive SQLite table with a
+  first-use ensure, per the 2.0 schema doctrine.
+- The 2.0 standing-grant ledger is a separate authority for cron/exec
+  approvals; external verification grants stay in the plugin-owned grant
+  store and never mint standing grants.
+
+## Reviewer surfaces
+
+The TUI is the reference reviewer surface: approval card with the external
+choices and deny focused, one ceremony presented at a time, card dismissed
+once a challenge dispatches, challenge text and canonical commands in the
+chat log.
+
+Web and native reviewer support follows the same ownership split the RFC
+agreed on: the plugin owns what is presented, core surfaces own how. The
+plugin will emit surface-neutral presentation parts (challenge payload, link,
+text) alongside today's terminal text; each core surface renders parts
+natively (terminal QR, web image QR, native QR views) without learning any
+World semantics. Core keeps zero World-specific behavior; everything above
+the generic parts contract stays in this plugin.
+
 ## Test against a source checkout
 
 Until the API ships in an OpenClaw release, link a compatible checkout:

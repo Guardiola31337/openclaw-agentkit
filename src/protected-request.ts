@@ -164,11 +164,12 @@ export async function requestAgentkitProtectedResource(params: {
   fetchImpl?: FetchImpl;
   requestInitFactory?: () => RequestInit;
 }): Promise<AgentkitProtectedRequestResult> {
+  const resourceUrl = new URL(params.resourceUrl).toString();
   const fetchImpl = params.fetchImpl ?? fetch;
   const requestInitFactory = params.requestInitFactory ?? (() => ({}));
 
   const prepared = await prepareAgentkitProtectedRequest({
-    resourceUrl: params.resourceUrl,
+    resourceUrl,
     signerKeyHex: params.signerKeyHex,
     fetchImpl,
     requestInitFactory,

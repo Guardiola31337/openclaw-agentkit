@@ -1,7 +1,7 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
 import { AGENTKIT_CLI_DESCRIPTOR, registerAgentkitCli } from "./src/cli.js";
 
-export default definePluginEntry({
+const agentkitCliMetadata: OpenClawPluginDefinition = definePluginEntry({
   id: "agentkit",
   name: "AgentKit",
   description: "World AgentKit support for human-backed delegation and World ID HITL approvals.",
@@ -16,3 +16,5 @@ export default definePluginEntry({
     );
   },
 });
+
+export default agentkitCliMetadata;

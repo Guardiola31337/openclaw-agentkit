@@ -1,10 +1,8 @@
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import {
-  resolveVerifiedPluginApprovalOverGateway,
-  withOperatorApprovalsGatewayClient,
-} from "openclaw/plugin-sdk/gateway-runtime";
-import type { AgentkitPluginConfig } from "./config.js";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+
+type CallGatewayFromCli = typeof callGatewayFromCli;
+
+let approvalGatewayCaller: CallGatewayFromCli = callGatewayFromCli;
 
 export type AgentkitPendingApproval = {
   id: string;
@@ -22,7 +20,35 @@ export type AgentkitPendingApproval = {
   };
 };
 
-function asPendingApproval(value: unknown): AgentkitPendingApproval | null {
+async function callAgentkitApprovalGateway(params: {
+  method: "plugin.approval.list" | "plugin.approval.resolve";
+  gatewayToken?: string;
+  gatewayUrl?: string;
+  payload: Record<string, unknown>;
+}): Promise<unknown> {
+  const gatewayUrl = params.gatewayUrl?.trim();
+  if (gatewayUrl && !params.gatewayToken?.trim()) {
+    throw new Error("An explicit AgentKit Gateway URL requires --gateway-token.");
+  }
+  return await approvalGatewayCaller(
+    params.method,
+    {
+      json: true,
+      timeout: "10000",
+      ...(gatewayUrl ? { url: gatewayUrl } : {}),
+      ...(params.gatewayToken ? { token: params.gatewayToken } : {}),
+    },
+    params.payload,
+    {
+      clientName: "cli",
+      mode: "cli",
+      progress: false,
+      scopes: ["operator.approvals"],
+    },
+  );
+}
+
+export function parseAgentkitPendingApproval(value: unknown): AgentkitPendingApproval | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -60,28 +86,46 @@ function asPendingApproval(value: unknown): AgentkitPendingApproval | null {
   };
 }
 
+export function createAgentkitApprovalFallback(params: {
+  approvalId: string;
+  sessionKey?: string | null;
+  toolName?: string | null;
+  nowMs?: number;
+}): AgentkitPendingApproval {
+  const nowMs = params.nowMs ?? Date.now();
+  return {
+    id: params.approvalId,
+    createdAtMs: nowMs,
+    expiresAtMs: nowMs + 10 * 60 * 1000,
+    request: {
+      pluginId: "agentkit",
+      title: "World proof required",
+      description: "Verify with World before this protected action continues.",
+      severity: "warning",
+      toolName: params.toolName ?? null,
+      toolCallId: null,
+      agentId: null,
+      sessionKey: params.sessionKey ?? null,
+    },
+  };
+}
+
 export async function listPendingAgentkitApprovals(params: {
-  appConfig: OpenClawConfig;
+  gatewayToken?: string;
   gatewayUrl?: string;
 }): Promise<AgentkitPendingApproval[]> {
-  return await withOperatorApprovalsGatewayClient(
-    {
-      config: params.appConfig,
-      gatewayUrl: params.gatewayUrl,
-      clientDisplayName: "AgentKit approvals",
-    },
-    async (client) => {
-      const raw = await client.request("plugin.approval.list", {});
-      if (!Array.isArray(raw)) {
-        return [];
-      }
-      return raw
-        .map(asPendingApproval)
-        .filter(
-          (entry): entry is AgentkitPendingApproval => entry?.request.pluginId === "agentkit",
-        );
-    },
-  );
+  const raw = await callAgentkitApprovalGateway({
+    method: "plugin.approval.list",
+    gatewayToken: params.gatewayToken,
+    gatewayUrl: params.gatewayUrl,
+    payload: {},
+  });
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map(parseAgentkitPendingApproval)
+    .filter((entry): entry is AgentkitPendingApproval => entry?.request.pluginId === "agentkit");
 }
 
 export function resolveRequestedAgentkitApproval(params: {
@@ -106,64 +150,78 @@ export function resolveRequestedAgentkitApproval(params: {
   );
 }
 
-function approvalMatchesGrantScope(params: {
-  approval: AgentkitPendingApproval;
-  candidate: AgentkitPendingApproval;
-  pluginConfig: AgentkitPluginConfig;
-}): boolean {
-  if (params.candidate.id === params.approval.id) {
-    return false;
+function validateFallbackApproval(params: {
+  approvalId: string;
+  fallbackApproval: AgentkitPendingApproval | null | undefined;
+}): AgentkitPendingApproval | null {
+  const fallback = params.fallbackApproval;
+  if (!fallback) {
+    return null;
   }
-  if (params.candidate.request.toolName !== params.approval.request.toolName) {
-    return false;
+  if (fallback.id !== params.approvalId) {
+    throw new Error(`Pending AgentKit approval snapshot mismatch: ${params.approvalId}`);
   }
-  if (params.pluginConfig.hitl.grantScope === "agent") {
+  if (fallback.request.pluginId !== "agentkit") {
+    throw new Error(`Pending AgentKit approval snapshot is not for AgentKit: ${params.approvalId}`);
+  }
+  if (fallback.expiresAtMs <= Date.now()) {
+    throw new Error(`Pending AgentKit approval expired: ${params.approvalId}`);
+  }
+  return fallback;
+}
+
+export function resolveAgentkitApprovalSelection(params: {
+  approvalId?: string;
+  approvals: AgentkitPendingApproval[];
+  fallbackApproval?: AgentkitPendingApproval | null;
+  sessionKey?: string | null;
+  fallbackToolName?: string | null;
+}): AgentkitPendingApproval {
+  if (params.approvalId) {
+    const pendingMatch = params.approvals.find((approval) => approval.id === params.approvalId);
+    if (pendingMatch) {
+      return pendingMatch;
+    }
     return (
-      params.approval.request.agentId != null &&
-      params.candidate.request.agentId === params.approval.request.agentId
+      validateFallbackApproval({
+        approvalId: params.approvalId,
+        fallbackApproval: params.fallbackApproval,
+      }) ??
+      createAgentkitApprovalFallback({
+        approvalId: params.approvalId,
+        sessionKey: params.sessionKey,
+        toolName: params.fallbackToolName,
+      })
     );
   }
-  return (
-    params.approval.request.sessionKey != null &&
-    params.candidate.request.sessionKey === params.approval.request.sessionKey
-  );
+
+  if (params.sessionKey) {
+    const sessionMatches = params.approvals.filter(
+      (approval) => approval.request.sessionKey === params.sessionKey,
+    );
+    if (sessionMatches.length === 1) {
+      return sessionMatches[0];
+    }
+  }
+
+  return resolveRequestedAgentkitApproval({
+    approvals: params.approvals,
+  });
 }
 
-export function sortPendingAgentkitApprovals(
-  approvals: AgentkitPendingApproval[],
-): AgentkitPendingApproval[] {
-  return approvals.toSorted((a, b) => a.createdAtMs - b.createdAtMs || a.id.localeCompare(b.id));
-}
-
-export function filterMatchingPendingAgentkitApprovals(params: {
-  approvals: AgentkitPendingApproval[];
-  approval: AgentkitPendingApproval;
-  pluginConfig: AgentkitPluginConfig;
-}): AgentkitPendingApproval[] {
-  return sortPendingAgentkitApprovals(
-    params.approvals.filter((candidate) =>
-      approvalMatchesGrantScope({
-        approval: params.approval,
-        candidate,
-        pluginConfig: params.pluginConfig,
-      }),
-    ),
-  );
-}
-
-export async function resolvePendingAgentkitApproval(params: {
-  appConfig: OpenClawConfig;
+export async function denyPendingAgentkitApproval(params: {
   approvalId: string;
-  decision: ExecApprovalDecision;
+  gatewayToken?: string;
   gatewayUrl?: string;
 }): Promise<void> {
-  await resolveVerifiedPluginApprovalOverGateway({
-    config: params.appConfig,
+  await callAgentkitApprovalGateway({
+    method: "plugin.approval.resolve",
+    gatewayToken: params.gatewayToken,
     gatewayUrl: params.gatewayUrl,
-    clientDisplayName: "AgentKit proof-backed approval",
-    approvalId: params.approvalId,
-    decision: params.decision,
-    pluginId: "agentkit",
+    payload: {
+      id: params.approvalId,
+      decision: "deny",
+    },
   });
 }
 
@@ -189,3 +247,12 @@ export function formatPendingAgentkitApprovalsText(
     }),
   ].join("\n");
 }
+
+export const __testing = {
+  resetApprovalGatewayCaller: () => {
+    approvalGatewayCaller = callGatewayFromCli;
+  },
+  setApprovalGatewayCaller: (caller: CallGatewayFromCli) => {
+    approvalGatewayCaller = caller;
+  },
+};

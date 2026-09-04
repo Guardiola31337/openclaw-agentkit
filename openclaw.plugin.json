@@ -3,7 +3,7 @@
   "name": "AgentKit",
   "description": "World AgentKit support for human-backed delegation and World ID HITL approvals.",
   "activation": {
-    "onStartup": false,
+    "onStartup": true,
     "onCommands": ["agentkit"],
     "onCapabilities": ["hook"]
   },
@@ -144,7 +144,7 @@
     },
     "hitl.resourceUrl": {
       "label": "HITL Protected Resource URL",
-      "help": "AgentKit-protected resource URL used to verify proof-backed delegation before resolving pending approvals in `delegation` mode."
+      "help": "Optional AgentKit-protected resource URL for standalone `openclaw agentkit request` checks. Approval attempts use a one-use plugin-owned resource URL."
     },
     "hitl.protectedTools": {
       "label": "HITL Protected Tools",
@@ -161,8 +161,8 @@
       "advanced": true
     },
     "hitl.grantScope": {
-      "label": "HITL Grant Scope",
-      "help": "Whether successful AgentKit delegation applies to the current session or the current agent.",
+      "label": "Legacy HITL Grant Scope",
+      "help": "Scope for grants created by older delegation releases. New external-verification grants are bound to the exact OpenClaw session lifecycle.",
       "advanced": true
     },
     "hitl.grantTtlMs": {
@@ -171,8 +171,8 @@
       "advanced": true
     },
     "hitl.grantsFile": {
-      "label": "HITL Grants File",
-      "help": "Optional override path for the AgentKit HITL grant store.",
+      "label": "Legacy HITL Grants File",
+      "help": "Optional path for grants created by older delegation releases. New external-verification grants use the host-owned plugin grant store.",
       "advanced": true
     },
     "hitl.humanApproval.provider": {

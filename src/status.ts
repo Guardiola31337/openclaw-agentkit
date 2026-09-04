@@ -73,12 +73,12 @@ function buildNextSteps(params: {
   hitlEnabled: boolean;
   hitlMode: AgentkitHitlMode;
   hitlProtectedTools: string[];
-  hitlResourceUrl: string | null;
   humanApprovalBrokerUrl: string | null;
   humanApprovalProvider: "hosted" | "custom";
   humanApprovalAppId: string | null;
   humanApprovalRpId: string | null;
   humanApprovalSigningKeyConfigured: boolean;
+  gatewayTlsEnabled: boolean;
   walletAddress: string | null;
   cliCommand: string;
   cliAvailable: boolean;
@@ -95,6 +95,11 @@ function buildNextSteps(params: {
   if (params.hitlMode === "delegation" && !params.cliAvailable) {
     steps.push(
       `Install the AgentKit CLI or expose \`${params.cliCommand}\` on PATH. For an npx-based setup, set \`plugins.entries.agentkit.config.cli.command="npx"\` and \`plugins.entries.agentkit.config.cli.args=["-y","@worldcoin/agentkit-cli"]\`.`,
+    );
+  }
+  if (params.hitlMode === "delegation" && params.gatewayTlsEnabled) {
+    steps.push(
+      "Disable Gateway TLS before using AgentKit delegation HITL; the current signed-resource verifier is loopback-only and fails closed when TLS is enabled.",
     );
   }
   if (params.hitlMode === "delegation" && params.walletAddress && params.cliAvailable) {
@@ -114,11 +119,6 @@ function buildNextSteps(params: {
   if (params.hitlEnabled && params.hitlProtectedTools.length === 0) {
     steps.push(
       "Set `plugins.entries.agentkit.config.hitl.protectedTools` to the tool names that should require World-backed delegation.",
-    );
-  }
-  if (params.hitlEnabled && params.hitlMode === "delegation" && !params.hitlResourceUrl) {
-    steps.push(
-      "Set `plugins.entries.agentkit.config.hitl.resourceUrl` so protected tool approvals can verify against an AgentKit-protected resource.",
     );
   }
   if (
@@ -164,11 +164,10 @@ function buildNextSteps(params: {
   if (
     params.hitlEnabled &&
     params.hitlMode === "delegation" &&
-    params.hitlResourceUrl &&
     params.hitlProtectedTools.length > 0
   ) {
     steps.push(
-      "Use `openclaw agentkit approvals` and `openclaw agentkit approve` to resolve pending AgentKit HITL requests after a successful proof-backed check.",
+      "Use the authenticated approval prompt's canonical external command, then run the one-use signed-resource command it presents with a registered AgentKit signer.",
     );
   }
   if (
@@ -182,7 +181,7 @@ function buildNextSteps(params: {
     params.hitlProtectedTools.length > 0
   ) {
     steps.push(
-      "Use `openclaw agentkit approve --approval-id <id>` to print a World QR/link, scan it in World App, and resolve the pending OpenClaw approval after proof verification.",
+      "Use the authenticated OpenClaw approval prompt's `Verify once` or `Verify and trust for session` command, then scan the World QR/link.",
     );
   }
   return steps;
@@ -233,6 +232,7 @@ export async function resolveAgentkitStatus(params: {
     pluginConfig.hitl.mode === "human-approval" &&
     (readyForHostedHumanApproval || readyForCustomHumanApproval) &&
     pluginConfig.hitl.protectedTools.length > 0;
+  const gatewayTlsEnabled = params.appConfig.gateway?.tls?.enabled === true;
 
   return {
     phase: "world-agentkit",
@@ -272,7 +272,7 @@ export async function resolveAgentkitStatus(params: {
         pluginConfig.hitl.mode === "delegation"
           ? entryState.effectiveEnabled &&
             pluginConfig.hitl.enabled &&
-            pluginConfig.hitl.resourceUrl != null &&
+            !gatewayTlsEnabled &&
             pluginConfig.hitl.protectedTools.length > 0
           : readyForHumanApproval,
       readyForHumanApproval,
@@ -282,12 +282,12 @@ export async function resolveAgentkitStatus(params: {
       hitlEnabled: pluginConfig.hitl.enabled,
       hitlMode: pluginConfig.hitl.mode,
       hitlProtectedTools: pluginConfig.hitl.protectedTools,
-      hitlResourceUrl: pluginConfig.hitl.resourceUrl,
       humanApprovalBrokerUrl: humanApproval.brokerUrl,
       humanApprovalProvider: humanApproval.provider,
       humanApprovalAppId: humanApproval.appId,
       humanApprovalRpId: humanApproval.rpId,
       humanApprovalSigningKeyConfigured,
+      gatewayTlsEnabled,
       walletAddress,
       cliCommand: pluginConfig.cli.command,
       cliAvailable,

@@ -3,10 +3,12 @@ import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
-} from "openclaw/plugin-sdk/plugin-runtime";
+} from "openclaw/plugin-sdk/types";
 import { resolveConfiguredAgentkitPluginConfig } from "./config.js";
-import { applyAgentkitHitlGrant, type AgentkitHitlGrantScope } from "./hitl-grants.js";
-import { buildHumanApprovalActionTemplates } from "./human-approval-actions.js";
+import {
+  applyAgentkitExternalGrant,
+  createAgentkitExternalGrantStoreAccessor,
+} from "./external-verification-grants.js";
 import { resolveAgentkitHumanApprovalRequestConfig } from "./human-approval.js";
 
 const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
@@ -18,35 +20,20 @@ function isProtectedTool(toolName: string, protectedTools: string[]): boolean {
   return protectedTools.includes(toolName);
 }
 
-function resolveGrantScope(ctx: PluginHookToolContext): AgentkitHitlGrantScope {
-  return {
-    toolName: ctx.toolName,
-    sessionKey: ctx.sessionKey ?? null,
-    agentId: ctx.agentId ?? null,
-  };
-}
-
 function buildApprovalDescription(params: {
   toolName: string;
   hitlMode: "delegation" | "human-approval";
-  resourceUrl: string | null;
-  grantScope: "session" | "agent";
 }): string {
-  const scopeLabel = params.grantScope === "agent" ? "this agent" : "this session";
   const lines =
     params.hitlMode === "human-approval"
       ? [
-          `Verify with World before \`${params.toolName}\` runs in ${scopeLabel}.`,
-          "Use the approval actions below, or list pending requests with `/agentkit approvals`.",
+          `Verify with World before \`${params.toolName}\` runs in this session.`,
+          "Choose the canonical external verification route or deny the request.",
         ]
       : [
-          `World proof of human is required before \`${params.toolName}\` can run for ${scopeLabel}.`,
-          "Resolve the pending request with `openclaw agentkit approve --approval-id <id> --private-key-file <path>`.",
-          "List pending requests with `openclaw agentkit approvals`.",
+          `AgentKit delegation proof is required before \`${params.toolName}\` runs in this session.`,
+          "Choose the canonical external verification route, then run the signed-resource command it presents.",
         ];
-  if (params.hitlMode === "delegation" && params.resourceUrl) {
-    lines.push(`Protected resource: ${params.resourceUrl}`);
-  }
   const full = lines.join(" ");
   if (full.length <= MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH) {
     return full;
@@ -54,14 +41,8 @@ function buildApprovalDescription(params: {
 
   const fallback =
     params.hitlMode === "human-approval"
-      ? [
-          `World proof of human is required before \`${params.toolName}\` can run for ${scopeLabel}.`,
-          "Use `openclaw agentkit approvals` then `openclaw agentkit approve --approval-id <id>` and scan the World QR.",
-        ].join(" ")
-      : [
-          `World proof of human is required before \`${params.toolName}\` can run for ${scopeLabel}.`,
-          "Use `openclaw agentkit approvals` then `openclaw agentkit approve --approval-id <id> --private-key-file <path>`.",
-        ].join(" ");
+      ? `World proof of human is required before \`${params.toolName}\` can run in this session.`
+      : `AgentKit delegation proof is required before \`${params.toolName}\` can run in this session.`;
   if (fallback.length <= MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH) {
     return fallback;
   }
@@ -74,6 +55,7 @@ export function createAgentkitBeforeToolCallHook(
   event: PluginHookBeforeToolCallEvent,
   ctx: PluginHookToolContext,
 ) => Promise<PluginHookBeforeToolCallResult | undefined> {
+  const getGrantStore = createAgentkitExternalGrantStoreAccessor(api);
   return async (_event, ctx) => {
     const appConfig = api.runtime.config.current() as OpenClawConfig;
     const pluginConfig = resolveConfiguredAgentkitPluginConfig(appConfig);
@@ -82,13 +64,6 @@ export function createAgentkitBeforeToolCallHook(
     }
     if (!isProtectedTool(ctx.toolName, pluginConfig.hitl.protectedTools)) {
       return undefined;
-    }
-    if (pluginConfig.hitl.mode === "delegation" && !pluginConfig.hitl.resourceUrl) {
-      return {
-        block: true,
-        blockReason:
-          "AgentKit HITL is enabled for this tool, but no protected resource URL is configured.",
-      };
     }
     if (pluginConfig.hitl.mode === "human-approval") {
       try {
@@ -105,37 +80,37 @@ export function createAgentkitBeforeToolCallHook(
       }
     }
 
-    const appliedGrant = applyAgentkitHitlGrant({
-      appConfig,
-      pluginConfig,
-      scope: resolveGrantScope(ctx),
+    const appliedExternalGrant = applyAgentkitExternalGrant({
+      store: getGrantStore(),
+      toolName: ctx.toolName,
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
     });
-    if (appliedGrant) {
+    if (appliedExternalGrant) {
       api.logger.info(
-        `agentkit: allowed ${ctx.toolName} via ${appliedGrant.grant.decision} grant (${pluginConfig.hitl.grantScope} scope)`,
+        `agentkit: allowed ${ctx.toolName} via verified session grant ${appliedExternalGrant.id}`,
       );
       return undefined;
     }
-
+    const externalDecisions: Array<"allow-once" | "allow-always"> =
+      ctx.sessionKey && ctx.sessionId ? ["allow-once", "allow-always"] : ["allow-once"];
     return {
       requireApproval: {
-        pluginId: "agentkit",
-        ...(pluginConfig.hitl.mode === "human-approval"
-          ? {
-              actions: buildHumanApprovalActionTemplates(pluginConfig),
-            }
-          : {}),
+        externalResolution: {
+          label:
+            pluginConfig.hitl.mode === "human-approval"
+              ? "Verify with World"
+              : "Verify AgentKit delegation",
+          decisions: externalDecisions,
+        },
         title: `World proof required for ${ctx.toolName}`,
         description: buildApprovalDescription({
           toolName: ctx.toolName,
           hitlMode: pluginConfig.hitl.mode,
-          resourceUrl: pluginConfig.hitl.resourceUrl,
-          grantScope: pluginConfig.hitl.grantScope,
         }),
         severity: pluginConfig.hitl.severity,
         timeoutMs: pluginConfig.hitl.timeoutMs,
         allowedDecisions: ["deny"],
-        keepPendingWithoutRoute: true,
       },
     };
   };

@@ -7,6 +7,7 @@ import {
   createAgentkitExternalGrantSessionGuard,
   createAgentkitSessionEndHook,
 } from "./src/external-verification-grants.js";
+import { resolveConfiguredAgentkitPluginConfig } from "./src/config.js";
 import { createAgentkitBeforeToolCallHook } from "./src/hitl.js";
 
 const agentkitPlugin: OpenClawPluginDefinition = definePluginEntry({
@@ -30,6 +31,19 @@ const agentkitPlugin: OpenClawPluginDefinition = definePluginEntry({
       handler: externalVerification.delegationHttpHandler,
     });
     api.on("before_tool_call", createAgentkitBeforeToolCallHook(api));
+    // Tell the host which tools we gate behind a World approval and how long a
+    // human may take, so an agent harness's per-tool-call watchdog waits for
+    // the scan instead of killing the call and retrying (which spawns duplicate
+    // approvals). Guarded so AgentKit still loads on hosts predating the seam.
+    if (typeof api.declareHumanApprovalTools === "function") {
+      const hitlConfig = resolveConfiguredAgentkitPluginConfig(api.runtime.config.current()).hitl;
+      if (hitlConfig.protectedTools.length > 0) {
+        api.declareHumanApprovalTools({
+          tools: hitlConfig.protectedTools,
+          timeoutMs: hitlConfig.timeoutMs,
+        });
+      }
+    }
     api.on("session_end", createAgentkitSessionEndHook(api, sessionGuard));
     api.registerCli(
       ({ program, config: appConfig }) => {
